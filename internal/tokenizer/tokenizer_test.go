@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/config"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/config"
 )
 
 func TestFitEncodeSaveLoad(t *testing.T) {

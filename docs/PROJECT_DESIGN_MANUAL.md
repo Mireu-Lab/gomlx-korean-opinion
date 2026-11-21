@@ -2,7 +2,7 @@
 
 * **Project Manager**: `limmireu1214@gmail.com`
 * **Implementation Owner**: `limmireu1214@gmail.com`
-* **Module Path**: `github.com/Mireu-Lab/gomlx-nfc-opinion`
+* **Module Path**: `github.com/Mireu-Lab/gomlx-korean-opinion`
 * **Tech Stack**: Go `1.27` · GoMLX `v0.28.38` · `gomlx/compute v0.1.32` · `gomlx/go-xla v0.4.32` · `parquet-go v0.32.1` · `yaml.v3 v3.0.1`
 * **작성 기준일 (UTC)**: 2026-11-21
 
@@ -19,7 +19,7 @@
 4. **이질적 도메인(뉴스 ↔ 리뷰) 통합 클러스터링 및 3단계 검증**: 표면적 문체 차이를 넘어 의미 임베딩(`HDBSCAN`), 고유명사·이슈 앵커(`NER`), 계층적 주제(`c-TF-IDF` / 선택적 LLM)로 통합 군집화하고 수학적·일관성·인간 검증을 수행
 
 ### 1.2 핵심 엔지니어링 원칙
-* **Pure Go (Zero Python)**: 데이터 다운로드, Parquet 파싱, 한국어 토크나이징, GoMLX 신경망 학습·추론, HDBSCAN 클러스터링, 평가·리포트 생성까지 전 과정을 순수 Go로 구현하여 단일 바이너리(`bin/nfc-analyzer`)로 실행합니다.
+* **Pure Go (Zero Python)**: 데이터 다운로드, Parquet 파싱, 한국어 토크나이징, GoMLX 신경망 학습·추론, HDBSCAN 클러스터링, 평가·리포트 생성까지 전 과정을 순수 Go로 구현하여 단일 바이너리(`bin/opinion-analyzer`)로 실행합니다.
 * **Zero Hardcoding**: 모든 URL, 파일 경로, 토크나이저 규격, 모델 구조, 손실 가중치, 정렬 기준, 7개 주제 정의, 16개 핵심감정 어휘 사전, NER 규칙, 클러스터링 및 검증 임계값은 `config/*.yaml`, 환경변수, CLI 플래그로만 주입합니다.
 * **Dual Logging Standard**: Jenkins 스타일의 파이프라인 단계 로그(`logs/status.log`)와 Log4j 스타일의 상세 구조화 로그(`logs/processing.log`)를 동시에 기록합니다.
 * **Verification First**: 모든 모듈의 단위 테스트(`go test`)와 실제 NSMC + KLUE-YNAT 데이터셋 기반 엔드투엔드 검증을 통과한 수치만을 기준으로 동작을 보장합니다.
@@ -60,9 +60,9 @@ flowchart TD
 ### 3.1 디렉터리 구조
 
 ```text
-gomlx-nfc-opinion/
+gomlx-korean-opinion/
 ├── cmd/
-│   └── nfc-analyzer/
+│   └── opinion-analyzer/
 │       └── main.go                 # CLI 진입점 (7개 서브커맨드 오케스트레이션)
 ├── config/
 │   ├── config.yaml                 # 런타임, 경로, 데이터셋, 토크나이저, 모델, 학습, 정렬, 클러스터링 설정
@@ -91,7 +91,7 @@ gomlx-nfc-opinion/
 
 | 패키지 | 파일 | 핵심 심볼 및 역할 | 주요 의존 |
 |---|---|---|---|
-| `cmd/nfc-analyzer` | `main.go` | `runCommand`, `stageDownload`, `stageTrain`, `stageEval`, `stageAnalyze`, `stageCluster`, `stageEvalHuman` | 전체 `internal/*` |
+| `cmd/opinion-analyzer` | `main.go` | `runCommand`, `stageDownload`, `stageTrain`, `stageEval`, `stageAnalyze`, `stageCluster`, `stageEvalHuman` | 전체 `internal/*` |
 | `internal/config` | `config.go` | `Config`, `Load`, `applyEnvOverrides`, `Validate`, `ValidSortModes` | `yaml.v3` |
 | `internal/logging` | `logger.go` | `DualLogger`, `NewDualLogger`, `Status`, `Debug`/`Info`/`Warn`/`Error` | 표준 라이브러리 |
 | `internal/nfc` | `taxonomy.go` | `Taxonomy`, `TopicDef`, `FeelingDef`, `LoadTaxonomy`, `WeakAnnotate`, `SortedTopicsByDisplayOrder` | `yaml.v3` |
@@ -276,17 +276,17 @@ flowchart LR
 ./scripts/run_pipeline.sh pipeline
 
 # 2. 개별 단계 실행
-./bin/nfc-analyzer download --config config/config.yaml
-./bin/nfc-analyzer train    --config config/config.yaml --steps 1500 --batch-size 64
-./bin/nfc-analyzer eval     --config config/config.yaml
-./bin/nfc-analyzer analyze  --config config/config.yaml --sort-by topic_nfc_intensity
-./bin/nfc-analyzer cluster  --config config/config.yaml
+./bin/opinion-analyzer download --config config/config.yaml
+./bin/opinion-analyzer train    --config config/config.yaml --steps 1500 --batch-size 64
+./bin/opinion-analyzer eval     --config config/config.yaml
+./bin/opinion-analyzer analyze  --config config/config.yaml --sort-by topic_nfc_intensity
+./bin/opinion-analyzer cluster  --config config/config.yaml
 
 # 3. 커스텀 기사(.jsonl / .csv / .tsv) 분석 및 정렬
-./bin/nfc-analyzer analyze --config config/config.yaml --input my_articles.jsonl --sort-by intensity_desc
+./bin/opinion-analyzer analyze --config config/config.yaml --input my_articles.jsonl --sort-by intensity_desc
 
 # 4. 전문가 인간 검증 CSV 채점
-./bin/nfc-analyzer eval-human --config config/config.yaml --input outputs/human_eval_sample.csv
+./bin/opinion-analyzer eval-human --config config/config.yaml --input outputs/human_eval_sample.csv
 ```
 
 ### 8.3 이중 로깅 포맷 (`internal/logging/logger.go`)

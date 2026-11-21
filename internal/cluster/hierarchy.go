@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/config"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/logging"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/tokenizer"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/config"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/logging"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/tokenizer"
 )
 
 // ExtractDocKeywords returns filtered domain-meaningful keywords for c-TF-IDF and topic coherence.

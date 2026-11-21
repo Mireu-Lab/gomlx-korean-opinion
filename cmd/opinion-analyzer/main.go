@@ -12,14 +12,14 @@ import (
 	"github.com/gomlx/compute"
 	gomlxmodel "github.com/gomlx/gomlx/ml/model"
 
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/cluster"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/config"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/data"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/logging"
-	nfcmodel "github.com/Mireu-Lab/gomlx-nfc-opinion/internal/model"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/nfc"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/sorter"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/tokenizer"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/cluster"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/config"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/data"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/logging"
+	nfcmodel "github.com/Mireu-Lab/gomlx-korean-opinion/internal/model"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/nfc"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/sorter"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/tokenizer"
 )
 
 func main() {
@@ -590,7 +590,7 @@ func logEvalReport(log *logging.DualLogger, r *nfcmodel.EvalReport) {
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, `Usage: nfc-analyzer <command> [flags]
+	fmt.Fprintf(os.Stderr, `Usage: opinion-analyzer <command> [flags]
 
 Commands:
   download    Download NSMC and KLUE-YNAT datasets configured in config.yaml

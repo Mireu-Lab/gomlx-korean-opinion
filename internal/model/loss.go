@@ -5,7 +5,7 @@ import (
 	. "github.com/gomlx/gomlx/core/graph"
 	"github.com/gomlx/gomlx/ml/train"
 
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/config"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/config"
 )
 
 func maskedMean(perExample, mask *Node, maskEpsilon float64) *Node {

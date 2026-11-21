@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/config"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/data"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/logging"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/nfc"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/sorter"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/config"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/data"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/logging"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/nfc"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/sorter"
 )
 
 // RunClusteringPipeline executes all 3 clustering methods (Hybrid HDBSCAN, NER Entity Anchors,

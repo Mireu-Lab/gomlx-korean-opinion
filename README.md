@@ -46,18 +46,18 @@
 ### 개별 단계 실행
 ```bash
 # 데이터셋 다운로드 / 학습 / 평가
-go run ./cmd/nfc-analyzer download --config config/config.yaml
-go run ./cmd/nfc-analyzer train --config config/config.yaml --steps 1500
-go run ./cmd/nfc-analyzer eval --config config/config.yaml
+go run ./cmd/opinion-analyzer download --config config/config.yaml
+go run ./cmd/opinion-analyzer train --config config/config.yaml --steps 1500
+go run ./cmd/opinion-analyzer eval --config config/config.yaml
 
 # 기사별 사회적 여론 감정·핵심감정 분류 및 정렬
-go run ./cmd/nfc-analyzer analyze --config config/config.yaml --sort-by topic_nfc_intensity
+go run ./cmd/opinion-analyzer analyze --config config/config.yaml --sort-by topic_nfc_intensity
 
 # 뉴스 + 리뷰 혼합 다차원 클러스터링 및 3단계 검증
-go run ./cmd/nfc-analyzer cluster --config config/config.yaml
+go run ./cmd/opinion-analyzer cluster --config config/config.yaml
 
 # 전문가 인간 검증 CSV 채점 (정합성 & Cohen's Kappa)
-go run ./cmd/nfc-analyzer eval-human --config config/config.yaml --input outputs/human_eval_sample.csv
+go run ./cmd/opinion-analyzer eval-human --config config/config.yaml --input outputs/human_eval_sample.csv
 ```
 
 ### 지원 정렬 모드 (`--sort-by`)
