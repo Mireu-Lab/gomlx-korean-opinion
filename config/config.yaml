@@ -1,0 +1,109 @@
+runtime:
+  backend: "go"
+  seed: 42
+  http_timeout_sec: 120
+  http_retries: 3
+
+paths:
+  data_dir: "data"
+  checkpoint_dir: "checkpoints/relu_nlp"
+  output_dir: "outputs"
+  log_dir: "logs"
+  topics_file: "config/topics.yaml"
+  nfc_taxonomy_file: "config/nfc_taxonomy.yaml"
+  entity_rules_file: "config/entity_rules.yaml"
+
+datasets:
+  nsmc_train_url: "https://raw.githubusercontent.com/e9t/nsmc/master/ratings_train.txt"
+  nsmc_test_url: "https://raw.githubusercontent.com/e9t/nsmc/master/ratings_test.txt"
+  ynat_train_url: "https://huggingface.co/datasets/klue/klue/resolve/main/ynat/train-00000-of-00001.parquet"
+  ynat_val_url: "https://huggingface.co/datasets/klue/klue/resolve/main/ynat/validation-00000-of-00001.parquet"
+  nsmc_train_file: "nsmc_ratings_train.txt"
+  nsmc_test_file: "nsmc_ratings_test.txt"
+  ynat_train_file: "klue_ynat_train.parquet"
+  ynat_val_file: "klue_ynat_validation.parquet"
+
+tokenizer:
+  vocab_size: 20000
+  max_seq_len: 48
+  min_freq: 2
+  use_char_bigrams: true
+  use_char_trigrams: true
+  pad_token: "<PAD>"
+  unk_token: "<UNK>"
+  vocab_filename: "vocab.json"
+
+model:
+  embed_dim: 64
+  hidden_dims:
+    - 128
+    - 64
+  head_dim: 64
+  dropout_rate: 0.2
+  activation: "relu"
+
+training:
+  batch_size: 64
+  eval_batch_size: 128
+  train_steps: 1500
+  log_every_steps: 100
+  checkpoint_keep: 3
+  optimizer: "adamw"
+  learning_rate: 0.003
+  min_learning_rate: 0.0002
+  weight_decay: 0.0001
+  ynat_batch_ratio: 0.45
+  nsmc_batch_ratio: 0.55
+  nfc_positive_sample_ratio: 0.50
+  nfc_negative_calibration_prob: 0.35
+  loss_weights:
+    topic: 1.0
+    sentiment: 1.0
+    nfc: 1.5
+    nfc_pos_weight: 6.0
+    mask_epsilon: 0.000001
+
+inference_and_sorting:
+  default_sort_mode: "topic_nfc_intensity"
+  neural_nfc_weight: 0.85
+  lexical_nfc_weight: 0.15
+  nfc_active_threshold: 0.35
+  sentiment_pos_threshold: 0.60
+  sentiment_neg_threshold: 0.40
+  intensity_weights:
+    max_nfc: 0.55
+    mean_top3_nfc: 0.25
+    negative_sentiment: 0.20
+  top_k_nfc: 3
+  report_top_articles_per_group: 5
+  report_top_global_articles: 20
+
+logging:
+  status_filename: "status.log"
+  processing_filename: "processing.log"
+  level: "INFO"
+
+clustering:
+  enabled: true
+  ynat_sample_size: 800
+  nsmc_sample_size: 400
+  min_cluster_size: 15
+  min_samples: 8
+  cluster_selection_epsilon: 0.0
+  feature_weights:
+    latent: 0.40
+    topic_probs: 0.30
+    nfc_probs: 0.20
+    sentiment: 0.10
+  top_keywords_per_cluster: 10
+  representative_docs_per_cluster: 6
+  coherence_epsilon: 0.000000001
+  human_eval_sample_size: 150
+  human_eval_target_agreement: 0.80
+  silhouette_target: 0.50
+  llm_labeling:
+    enabled: false
+    endpoint_env: "NFC_LLM_ENDPOINT"
+    api_key_env: "NFC_LLM_API_KEY"
+    model_env: "NFC_LLM_MODEL"
+    timeout_sec: 30

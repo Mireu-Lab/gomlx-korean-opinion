@@ -1,0 +1,36 @@
+topics:
+  - id: 0
+    code: "it_science"
+    ko_name: "IT과학"
+    en_name: "IT & Science"
+    display_order: 0
+  - id: 1
+    code: "economy"
+    ko_name: "경제"
+    en_name: "Economy"
+    display_order: 1
+  - id: 2
+    code: "society"
+    ko_name: "사회"
+    en_name: "Society"
+    display_order: 2
+  - id: 3
+    code: "life_culture"
+    ko_name: "생활문화"
+    en_name: "Life & Culture"
+    display_order: 3
+  - id: 4
+    code: "world"
+    ko_name: "세계"
+    en_name: "World"
+    display_order: 4
+  - id: 5
+    code: "sports"
+    ko_name: "스포츠"
+    en_name: "Sports"
+    display_order: 5
+  - id: 6
+    code: "politics"
+    ko_name: "정치"
+    en_name: "Politics"
+    display_order: 6
