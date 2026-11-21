@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/config"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/config"
 )
 
 // Tokenizer converts Korean/ASCII text into fixed-length integer token ID sequences.

@@ -9,9 +9,9 @@ import (
 	"github.com/gomlx/gomlx/core/tensors"
 	"github.com/gomlx/gomlx/ml/train"
 
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/config"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/nfc"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/tokenizer"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/config"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/nfc"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/tokenizer"
 )
 
 // EncodedExample holds tokenized IDs and multi-task supervision targets/masks for one text item.

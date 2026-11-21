@@ -1,8 +1,8 @@
 package cluster
 
 import (
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/data"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/sorter"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/data"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/sorter"
 )
 
 // Entity represents a domain anchor extracted from text using externalized NER rules.

@@ -9,8 +9,8 @@ import (
 	"github.com/gomlx/gomlx/ml/model"
 	"github.com/gomlx/gomlx/ml/model/checkpoint"
 
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/data"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/sorter"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/data"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/sorter"
 )
 
 // Predictor runs batched static-shape inference on a trained GoMLX ReLU multi-task model.

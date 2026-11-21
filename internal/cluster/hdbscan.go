@@ -4,7 +4,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/config"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/config"
 )
 
 // HDBSCANResult contains cluster assignments (-1 for noise) and membership strengths.

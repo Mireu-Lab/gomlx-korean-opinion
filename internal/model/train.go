@@ -14,11 +14,11 @@ import (
 	"github.com/gomlx/gomlx/ml/train/optimizer"
 	"github.com/gomlx/gomlx/ml/train/optimizer/cosineschedule"
 
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/config"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/data"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/logging"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/nfc"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/sorter"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/config"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/data"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/logging"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/nfc"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/sorter"
 )
 
 // TopicMetric stores per-topic evaluation precision, recall, F1, and support.

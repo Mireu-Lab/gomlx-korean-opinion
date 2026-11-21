@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/config"
-	"github.com/Mireu-Lab/gomlx-nfc-opinion/internal/logging"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/config"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/logging"
 )
 
 type downloadSpec struct {
@@ -72,7 +72,7 @@ func downloadFileOnce(client *http.Client, url, destPath string) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "gomlx-nfc-opinion/1.0")
+	req.Header.Set("User-Agent", "gomlx-korean-opinion/1.0")
 
 	resp, err := client.Do(req)
 	if err != nil {

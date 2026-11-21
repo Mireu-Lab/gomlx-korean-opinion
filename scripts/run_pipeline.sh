@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 CONFIG_PATH="${CONFIG_PATH:-${PROJECT_ROOT}/config/config.yaml}"
-BIN_PATH="${BIN_PATH:-${PROJECT_ROOT}/bin/nfc-analyzer}"
+BIN_PATH="${BIN_PATH:-${PROJECT_ROOT}/bin/opinion-analyzer}"
 COMMAND="${1:-pipeline}"
 if [[ $# -gt 0 ]]; then
   shift
@@ -20,8 +20,8 @@ log_step() {
 cd "${PROJECT_ROOT}"
 mkdir -p "$(dirname "${BIN_PATH}")"
 
-log_step "INFO" "Building nfc-analyzer binary -> ${BIN_PATH}"
-go build -o "${BIN_PATH}" ./cmd/nfc-analyzer
+log_step "INFO" "Building opinion-analyzer binary -> ${BIN_PATH}"
+go build -o "${BIN_PATH}" ./cmd/opinion-analyzer
 
 CMD_ARGS=(--config "${CONFIG_PATH}")
 if [[ -n "${GOMLX_BACKEND:-}" ]]; then

@@ -401,7 +401,7 @@ func ExportHumanEvalSample(
 5. 저장 후 아래 명령으로 정합성(Agreement Rate)과 Cohen's Kappa를 자동 산출합니다:
 
 `+"```bash"+`
-go run ./cmd/nfc-analyzer eval-human --config config/config.yaml --input %s
+go run ./cmd/opinion-analyzer eval-human --config config/config.yaml --input %s
 `+"```"+`
 `, len(sampled), csvPath)
 	if err := os.WriteFile(rubricPath, []byte(rubric), 0644); err != nil {

@@ -1,4 +1,4 @@
-module github.com/Mireu-Lab/gomlx-nfc-opinion
+module github.com/Mireu-Lab/gomlx-korean-opinion
 
 go 1.27
 
