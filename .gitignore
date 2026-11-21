@@ -1,0 +1,22 @@
+# Compiled binaries
+/bin/
+
+# Downloaded datasets, checkpoints, logs, and generated analysis reports
+/data/
+/checkpoints/
+/logs/
+/outputs/
+
+# Temporary, test, and build artifacts
+*.tmp
+*.bak
+*.exe
+*.test
+*.out
+coverage.*
+
+# Local environment overrides and OS metadata
+.env
+.env.*
+.DS_Store
+Thumbs.db
