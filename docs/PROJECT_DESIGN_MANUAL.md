@@ -3,8 +3,11 @@
 * **Project Manager**: `limmireu1214@gmail.com`
 * **Implementation Owner**: `limmireu1214@gmail.com`
 * **Module Path**: `github.com/Mireu-Lab/gomlx-korean-opinion`
-* **Tech Stack**: Go `1.27` · GoMLX `v0.28.38` · `gomlx/compute v0.1.32` · `gomlx/go-xla v0.4.32` · `parquet-go v0.32.1` · `yaml.v3 v3.0.1`
-* **작성 기준일 (UTC)**: 2026-11-21
+* **Hugging Face Dataset**: [`Mireu-Lab/gomlx-korean-opinion-dataset`](https://huggingface.co/datasets/Mireu-Lab/gomlx-korean-opinion-dataset)
+* **Hugging Face Model Hub**: [`Mireu-Lab/gomlx-korean-opinion`](https://huggingface.co/Mireu-Lab/gomlx-korean-opinion)
+* **Google Docs 논문 초안**: [`GoMLX KO-Hub 논문 초안`](https://docs.google.com/document/d/1Lx5mZmT5xWHzr1CIL6H2AduXl7gQm07TCul_xntxR3c/edit)
+* **Tech Stack**: Go `1.27` · GoMLX `v0.28.38` · `onnx-gomlx v0.5.35` · `gomlx/compute v0.1.32` · `gomlx/go-xla v0.4.32` · `parquet-go v0.32.1` · `yaml.v3 v3.0.1`
+* **작성 기준일 (UTC)**: 2026-11-22 (`v0.2.0` 6종 아키텍처 확장 반영)
 
 ---
 
@@ -63,25 +66,32 @@ flowchart TD
 gomlx-korean-opinion/
 ├── cmd/
 │   └── opinion-analyzer/
-│       └── main.go                 # CLI 진입점 (7개 서브커맨드 오케스트레이션)
+│       └── main.go                 # CLI 진입점 (10개 서브커맨드 + onnx_backbone_relu 분기)
 ├── config/
-│   ├── config.yaml                 # 런타임, 경로, 데이터셋, 토크나이저, 모델, 학습, 정렬, 클러스터링 설정
+│   ├── config.yaml                 # 런타임, 경로, 데이터셋, 토크나이저(조사분리), 6종 모델/ONNX, 학습(CORAL), 정렬, 클러스터링 설정
+│   ├── multilingual_roots.yaml     # KO-Hub 4축 다국어 뿌리(Unihan + OMW KO/EN/JA/ZH) 그래프·사전학습 설정
 │   ├── topics.yaml                 # KLUE-YNAT 7개 주제 메타데이터 및 정렬 순서
-│   ├── nfc_taxonomy.yaml           # Nuclear Feeling Checklist 16개 핵심감정, 8요인군, 어휘 사전
+│   ├── nfc_taxonomy.yaml           # Nuclear Feeling Checklist 16개 핵심감정, 8요인군, 어휘/동음이의어 가드 사전
 │   └── entity_rules.yaml           # NER 규칙(기관/지역/인명직함/작품트리거/공적이슈) 및 불용어
 ├── docs/
-│   └── PROJECT_DESIGN_MANUAL.md    # 본 설계 매뉴얼
+│   ├── PROJECT_DESIGN_MANUAL.md    # 본 설계 매뉴얼
+│   └── references.csv              # 원천 검증 완료 선행연구 및 언어학 참고문헌 18편
 ├── internal/
-│   ├── config/                     # YAML 파싱, 환경변수 오버라이드, 엄격 검증
+│   ├── config/                     # YAML 파싱, 6종 provider 및 ONNX 설정 검증, 환경변수 오버라이드
 │   ├── logging/                    # Jenkins status.log + Log4j processing.log 이중 로거
-│   ├── nfc/                        # Topic/NFC 분류체계 로더 및 약지도 어노테이터
-│   ├── tokenizer/                  # 한국어 정규화, 단어 + 2/3-gram 어휘 구축 및 인코딩
-│   ├── data/                       # HTTP 다운로더, NSMC/YNAT/커스텀 로더, 균형 멀티태스크 Dataset
-│   ├── model/                      # GoMLX ReLU 네트워크, 마스킹 손실, 학습 루프, 정적 추론기
+│   ├── nfc/                        # Topic/NFC 분류체계 로더 및 WeakAnnotateDetailed 동음이의어 가드
+│   ├── graphkg/                    # Unihan/OMW 다국어 뿌리 다운로더 및 이종 CSR 지식 그래프 빌더
+│   ├── pretrain/                   # Context-Aware Soft Edge InfoNCE + 동음이의어 분리 + Student 비대칭 증류
+│   ├── tokenizer/                  # 한국어 정규화, 조사 26종 경계 분리(SplitKoreanParticle), 어순 시퀀스 추출
+│   ├── data/                       # HTTP 다운로더, NSMC/YNAT/커스텀 로더, 듀얼입력 Dataset, Parquet exporter(export.go)
+│   ├── onnxembed/                  # 순수 Go WordPiece 토크나이저 + onnx-gomlx KLUE-RoBERTa 임포트 및 임베딩 캐시
+│   ├── model/                      # 6종 GoMLX ReLU 인코더(encoders.go/relu_nlp.go/onnx_head.go), CORAL+마스킹 손실, 정적 추론
 │   ├── sorter/                     # NFC 보정, 여론 강도 스코어링, 4종 정렬기, 교차 매트릭스/리포트
-│   └── cluster/                    # HDBSCAN, NER 앵커, c-TF-IDF 계층 명명, 3단계 검증 및 리포트
+│   └── cluster/                    # 순수 Go Power-Iteration PCA(pca.go), HDBSCAN, NER 앵커, c-TF-IDF, 3단계 검증
 ├── scripts/
-│   └── run_pipeline.sh             # Bash 파이프라인 실행기 (set -euo pipefail)
+│   ├── run_pipeline.sh             # 단일 모델 Bash 파이프라인 실행기 (set -euo pipefail)
+│   ├── benchmark_all_models.sh     # 6종 아키텍처 일괄 실데이터 벤치마크 러너
+│   └── publish_hf.sh               # 전처리 Parquet 데이터셋 및 학습 모델 Hugging Face Hub 업로드 스크립트
 ├── go.mod
 ├── go.sum
 └── README.md
@@ -298,30 +308,34 @@ flowchart LR
 ## 9. 아키텍처 의사결정 기록(ADR), 실측 벤치마크 및 확장 로드맵
 
 ### 9.1 주요 아키텍처 의사결정 (ADR)
-1. **ADR-001 (순수 Go + GoMLX `gobackend` 기본 / OpenXLA 선택 구조)**: C/Python 런타임 의존 없이 단일 바이너리 이식성을 확보하면서도 `!noxla` 빌드 태그로 XLA 가속 전환이 가능하도록 설계.
-2. **ADR-002 (단어 우선 + 음절 2/3-gram 토크나이저)**: 외부 형태소 분석기 설치 없이도 `max_seq_len=48` 내에서 뉴스·리뷰 어휘 커버리지 확보.
-3. **ADR-003 (조건부 NFC 헤드 + 부정 캘리브레이션)**: 약지도 키워드 매칭의 편향을 억제하기 위해 긍정 리뷰 일부에 0 타깃 마스크(`nfc_negative_calibration_prob=0.35`)를 부여하고, 주제·감성 은닉 벡터를 NFC 헤드에 결합.
-4. **ADR-004 (순수 Go HDBSCAN + `df >= 2` c-TF-IDF)**: Python `scikit-learn`/`hdbscan` 없이도 가변 밀도 군집화 및 `-1` 노이즈 필터링을 구현하고, 단일 문서 희귀 토큰의 키워드 오염을 차단.
-5. **ADR-005 (정적 배치 패딩 추론)**: GoMLX 그래프 재컴파일 오버헤드를 제거하기 위해 추론 말미 배치를 `eval_batch_size`로 패딩해 단일 그래프만 컴파일.
+1. **ADR-001 (순수 Go + GoMLX `gobackend` 기본 / OpenXLA `xla:cpu` 가속 구조)**: C/Python 런타임 의존 없이 단일 바이너리 이식성을 확보하면서도 `--backend xla:cpu` 전환 시 PJRT JIT 컴파일로 `32.6x`(CNN 기준 `554ms -> 17ms`) 가속을 확보.
+2. **ADR-002 (한국어 조사 경계 분리 + 어순 시퀀스 이중 인코딩)**: `SplitKoreanParticle`(`min_stem_runes=2`, 조사 26종)으로 `"단색화가"`를 `w:단색화 p:가`로 분리해 교차 경계 음절 2-gram(`2:화가`) 오탐을 차단하고, Bag-of-Tokens `[B, 48]`과 어순 Word Sequence `[B, 20]`을 동시 제공.
+3. **ADR-003 (KO-Hub 4축 다국어 뿌리 그래프 + Context-Aware Soft Edge 비대칭 증류)**: `Unihan`(한자) + `OMW/WordNet`(KO/EN/JA/ZH) + 말뭉치로 구축한 `74,578`노드/`374,577`엣지 CSR 그래프를 학습 시에만 문맥 어텐션(`Soft Edge`)과 InfoNCE + 동음이의어 분리 마진으로 증류하고, 추론 시에는 한국어 단독 Student 인코더만 실행.
+4. **ADR-004 (동음이의어 가드 Hard-Negative 캘리브레이션 + CORAL 사용역 정렬)**: `WeakAnnotateDetailed`로 가드 발동 문서를 명시적 부정 감독(`nfc_supervised_mask=1.0`)으로 학습하고, YNAT(뉴스)↔NSMC(리뷰) 임베딩 1차/2차 통계량을 맞추는 Deep CORAL 손실(`domain_align=0.15`)을 결합.
+5. **ADR-005 (6종 멀티아키텍처 비교 + 순수 Go PCA + HDBSCAN)**: `scratch_relu`, `ko_hub_graph`, `ko_hub_cnn_relu`, `ko_hub_transformer_relu`(RoPE+RMSNorm), `ko_hub_lstm_relu`(Ragged BiLSTM), `onnx_backbone_relu`(KLUE-RoBERTa ONNX via `onnx-gomlx`)를 동일 조건으로 비교하고, 128d 임베딩을 순수 Go Power-Iteration PCA(`24d`)로 축소해 HDBSCAN 거리 집중을 완화.
+6. **ADR-006 (Parquet 전처리 익스포트 + Hugging Face Hub 아카이빙)**: `export-dataset` 커맨드로 `254,777`행 전처리 Parquet 샤드(어순 토큰·조사분리·가드 플래그 포함)를 생성하고, `scripts/publish_hf.sh`로 HF Dataset/Model Hub에 재현 배포.
 
-### 9.2 실제 검증 완료 베이스라인 벤치마크
-2 vCPU / 3.8 GiB RAM Linux 환경에서 전체 실제 데이터(`NSMC Train 149,995`, `NSMC Test 49,997`, `KLUE-YNAT Train 45,678`, `KLUE-YNAT Val 9,107`)를 대상으로 검증한 실측 결과입니다.
+### 9.2 실제 검증 완료 6종 아키텍처 벤치마크 (`xla:cpu` 및 `v0.1.1` 대비)
+2 vCPU / 3.8 GiB RAM Linux amd64 환경에서 실제 데이터(`NSMC Train 149,995 / Test 49,997`, `KLUE-YNAT Train 45,678 / Val 9,107`)를 대상으로 검증한 실측 결과입니다. 참고 문헌 및 언어학 근거 18편은 [`docs/references.csv`](references.csv)에 수록되어 있습니다.
 
-| 검증 영역 | 지표 | 실측 결과 | 비고 |
-|---|---|---|---|
-| **단위 테스트** | `go test -count=1 ./...` | **8/8 패키지 PASS** | `config`, `logging`, `nfc`, `tokenizer`, `data`, `model`, `sorter`, `cluster` |
-| **학습 속도** | 1,500 steps (`go` 백엔드) | **1m 01s (36ms/step)** | 최종 Loss `1.3911` (MA `1.3866`) |
-| **KLUE-YNAT (n=9,107)** | Accuracy / Macro-F1 | **71.14% / 0.7100** | 스포츠 F1 `0.7874`, 경제 F1 `0.7520` |
-| **NSMC Test (n=49,997)** | Accuracy / F1 | **82.53% / 0.8309** | Precision `0.8105`, Recall `0.8523` |
-| **Nuclear Feeling (n=20,282)** | Recall@3 / Micro-F1 | **89.03% / 0.4529** | 16종 중 15종 활성 커버 |
-| **HDBSCAN 군집 (n=1,200)** | 군집 수 / 혼합 군집 / 노이즈 | **8개 / 7개 / 47.3%** | `ynat=800 + nsmc=400` |
-| **1단계 수학적 검증** | Silhouette / Dunn Centroid | **0.7877 / 4.5249** | 목표 Silhouette `>= 0.50` 달성 |
-| **2단계 일관성 검증** | Mean UMass / Mean NPMI | **-1.5519 / -0.3219** | 단문 헤드라인 동시출현 희소성 반영 |
-| **방식 ② NER 앵커** | 엔티티 그룹 / 교차 브리지 | **77개 / 19개** | `한국`, `전쟁`, `sk`, `학교`, `미국`, `범죄` 등 |
-| **3단계 인간 검증** | 층화 샘플 추출 | **150건 생성 완료** | `outputs/human_eval_sample.csv` |
+> **평가 범위 주석**: 네이티브 GoMLX 5종은 **전체 평가셋**(`YNAT n=9,107`, `NSMC n=49,997`, `NFC supervised=26,461 / active=19,650`)을 평가했습니다. `onnx_backbone_relu`(`leewaay/klue-roberta-base-klueNLI-klueSTS-MSL128` 768d 동결 임베딩)는 CPU 인코딩 시간(`~15m 46s`)상 도메인당 `max_train=2,000` / `max_eval=1,000`(`NFC supervised=781 / active=612`) 서브샘플 조건에서 학습·평가했으며, HDBSCAN 군집화는 전 모델 공통 `YNAT 800 + NSMC 400 = 1,200`건입니다.
+
+| 모델 (`embedding.provider`) | Steps / 스텝속도 / 학습시간 | PCA (`128→24d`) | YNAT Acc / Macro-F1 | NSMC Acc / F1 | NFC Recall@3 / Micro-F1 / 활성 | HDBSCAN 군집 (교차 / 노이즈) | Silhouette / Dunn_C / Mean NPMI |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| *(`v0.1.1` 구형 `scratch_relu`, `go`)* | *1,500 / 36ms / 1m01s* | *No* | *71.14% / 0.7100* | *82.53% / 0.8309* | *89.03% / 0.4529 / 15/16 (`외로움 0`)* | *8 (7 / 47.3%)* | *0.7877 / 4.5249 / -0.3219* |
+| **`scratch_relu`** *(조사분리+가드+CORAL, `xla:cpu`)* | 2,500 / `4ms` / `15s` | 0 | 74.76% / 0.7462 | 83.39% / 0.8355 | 93.81% / 0.5438 / **16/16** (`외167·소62`) | 8 (7 / 46.5%) | 0.6786 / 2.9383 / -0.3167 |
+| **`ko_hub_graph`** *(`xla:cpu`)* | 2,500 / `5ms` / `17s` | 24d (91.74%) | 74.82% / 0.7474 | 83.52% / 0.8346 | **95.04% / 0.6487 / 16/16** (`외336·소310`) | 6 (3 / 49.2%) | 0.4928 / 2.4043 / -0.3411 |
+| **`ko_hub_cnn_relu`** *(`xla:cpu`)* | 2,500 / `17ms` / `1m52s` | 24d (91.14%) | **75.91% / 0.7575** | 83.58% / **0.8359** | 94.67% / 0.6311 / **16/16** (`외94·소189`) | 7 (4 / 52.8%) | 0.6776 / 4.0664 / -0.3297 |
+| **`ko_hub_transformer_relu`** *(2L RoPE, `xla:cpu`)* | 2,500 / `180ms` / `6m14s` | 24d (93.83%) | 74.67% / 0.7461 | **83.60% / 0.8359** | 93.78% / 0.5711 / **16/16** (`외16·소111`) | **7 (7 / 62.5%)** | **0.6938 / 4.1647** / -0.3155 |
+| **`ko_hub_lstm_relu`** *(Ragged BiLSTM, `xla:cpu`)* | 1,500 / `237ms` / `6m55s` | 24d (92.42%) | 72.66% / 0.7272 | 82.84% / 0.8315 | 92.39% / 0.5316 / **16/16** (`외29·소8`) | 8 (5 / 51.9%) | 0.6586 / 2.9131 / -0.3164 |
+| **`onnx_backbone_relu`** *(RoBERTa 768d 동결, `xla:cpu`)* | 1,500 / `3ms` / `23s` (+enc `15m46s`) | 24d (84.58%) | 67.00% / 0.6738 *(n=1k)* | 80.70% / 0.8153 *(n=1k)* | 73.53% / 0.4297 / **16/16** *(n=612, 외8·소37)* | 7 (7 / 54.3%) | 0.5357 / 2.1630 / **-0.2861** |
+
+* **동음이의어 회귀 검증 (`단색화가`, `여류화가협회`)**:
+  * `"남춘모 부조적 단색화가 펼쳐 보이는 자연"`: `v0.1.1`의 `화(분노)` 오탐이 **전 6종 모델에서 완전히 해소**되었으며 `ko_hub_cnn_relu`·`ko_hub_transformer_relu`·`ko_hub_lstm_relu`·`onnx_backbone_relu` 모두 주제 **`생활문화`**를 정확히 복원.
+  * `"차병원 한국여류화가협회와 소녀가장 돕기 자선전시회 개최"`: `scratch_relu` 단독에서는 `화:0.659` 오탐이 잔존했으나 `ko_hub_graph`·`ko_hub_cnn_relu`·`ko_hub_transformer_relu`에서 주 감정 `화`가 제거되었고, `onnx_backbone_relu`는 `사회(0.9826) / 긍정(0.9995) / nfc_activated=false`로 가장 정확히 판별.
+* **단위/통합 테스트**: `go test -count=1 ./...` 기준 **11/11 패키지 PASS** (`cluster`, `config`, `data`, `graphkg`, `logging`, `model`, `nfc`, `onnxembed`, `pretrain`, `sorter`, `tokenizer`), 교차 도메인 NER 브리지 **19개**(ONNX 1k 서브샘플 기준 **15개**) 및 인간 검증 층화 샘플 **150건** 생성 확인.
 
 ### 9.3 향후 개선 및 운영 확장 로드맵
-1. **어휘 사전 보강**: 실측에서 활성 빈도가 낮았던 `외로움(id=4)`, `소외(id=14)`의 구어체/뉴스 키워드 확장을 통해 16/16 전 항목 균형 커버리지 확보.
-2. **XLA CPU/GPU 가속 및 모델 확장**: `GOMLX_BACKEND=xla:cpu` 또는 GPU 환경에서 `train_steps` 및 `embed_dim` 상향.
-3. **고도화된 임베딩·LLM 연동**: `onnx-gomlx`를 통한 사전학습 한국어 임베딩(`bge-m3`/`KoSimCSE`) 결합 및 `llm_labeling.enabled: true` 활성화.
-4. **배포 및 백업 (MLOps / IaC)**: 학습 체크포인트(`checkpoints/relu_nlp/`) 및 검증 데이터셋의 Hugging Face Hub 아카이빙, Terraform 원격 상태 백엔드 + GCP Cloud Run/Compute Engine 배치 파이프라인 및 Cloud Monitoring 알림 연동.
+1. **형태소 용언 활용 확장**: 체언 조사 분리(`SplitKoreanParticle`)에 이어 용언 어간/어미 및 불규칙 음운 변동(`외롭다 → 외로워`) 분해를 추가해 형태론적 일반화 강화.
+2. **전문가 Gold 평가셋(300~500건) 구축 및 `eval-human`**: 약지도 키워드 평가를 넘어 인간 합의(`Cohen's Kappa`) 기반의 정량 평가셋 확충 및 반어/경험자 분리.
+3. **클라우드 Spot GPU 배치 & GitFlow v0.2.0 릴리즈**: `gcp-calculator-mcp` 비용 산정 기반 GCP Spot VM 장기 학습 및 `feature -> develop -> main (v0.2.0)` 병합.
