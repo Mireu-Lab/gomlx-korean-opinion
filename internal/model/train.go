@@ -65,6 +65,13 @@ func BuildGraphConfig(cfg *config.Config, vocabLen, numTopics, numNFC int) Graph
 		EmbeddingProvider: cfg.Embedding.Provider,
 		StudentOutDim:     cfg.Embedding.StudentOutDim,
 		FreezeEncoder:     cfg.Embedding.FreezeEncoder,
+		CNNChannels:       cfg.Embedding.CNNChannels,
+		CNNKernels:        cfg.Embedding.CNNKernels,
+		TransformerLayers: cfg.Embedding.TransformerLayers,
+		TransformerHeads:  cfg.Embedding.TransformerHeads,
+		TransformerDim:    cfg.Embedding.TransformerDim,
+		LSTMHidden:        cfg.Embedding.LSTMHidden,
+		AttnPoolDim:       cfg.Embedding.AttnPoolDim,
 	}
 }
 
@@ -106,7 +113,7 @@ func Train(
 		return nil, fmt.Errorf("init checkpoint handler: %w", err)
 	}
 
-	if !resume && cfg.Embedding.Provider == "ko_hub_graph" {
+	if !resume && IsKoHubProvider(cfg.Embedding.Provider) {
 		transferred, err := pretrain.LoadPretrainedStudentWeights(
 			cfg.Embedding.PretrainCheckpointDir,
 			store,
@@ -117,6 +124,23 @@ func Train(
 		}
 		log.Info("trainer", "loaded %d pretrained /%s/ tensors from %s (freeze=%t)",
 			transferred, pretrain.StudentScopeName, cfg.Embedding.PretrainCheckpointDir, cfg.Embedding.FreezeEncoder)
+
+		if UsesSeqBranch(cfg.Embedding.Provider) {
+			tokEmbPath := "/" + pretrain.StudentScopeName + "/token_embed/embeddings"
+			for v := range store.IterVariables() {
+				if v.Path() == tokEmbPath {
+					if tVal, vErr := v.Value(); vErr == nil && tVal != nil {
+						if cloned, cErr := tVal.Clone(); cErr == nil {
+							if seqVar, sErr := store.CreateVariable("/relu_nlp/seq_embed/embeddings", cloned); sErr == nil {
+								seqVar.SetTrainable(!cfg.Embedding.FreezeEncoder)
+								log.Info("trainer", "seeded /relu_nlp/seq_embed/embeddings from pretrained KO-Hub token_embed")
+							}
+						}
+					}
+					break
+				}
+			}
+		}
 	}
 
 	trainDS, err := data.NewMultiTaskTrainDataset(
@@ -125,6 +149,7 @@ func Train(
 		nsmcTrain,
 		cfg.Training,
 		cfg.Tokenizer.MaxSeqLen,
+		cfg.Tokenizer.WordSeqLen,
 		tax.NumFeelings(),
 		cfg.Runtime.Seed,
 	)
@@ -188,7 +213,11 @@ func Evaluate(
 	ynatVal, nsmcTest []data.EncodedExample,
 ) (*EvalReport, []sorter.ArticlePrediction, error) {
 	graphCfg := BuildGraphConfig(cfg, vocabLen, tax.NumTopics(), tax.NumFeelings())
-	pred, err := NewPredictor(backend, store, graphCfg, cfg.Training.EvalBatchSize, cfg.Tokenizer.MaxSeqLen)
+	wordSeqLen := cfg.Tokenizer.WordSeqLen
+	if wordSeqLen <= 0 {
+		wordSeqLen = cfg.Tokenizer.MaxSeqLen
+	}
+	pred, err := NewPredictor(backend, store, graphCfg, cfg.Training.EvalBatchSize, cfg.Tokenizer.MaxSeqLen, wordSeqLen)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -202,7 +231,17 @@ func Evaluate(
 	if err != nil {
 		return nil, nil, fmt.Errorf("predict NSMC test: %w", err)
 	}
+	return computeEvalMetrics(cfg, tax, ynatVal, ynatPreds, nsmcTest, nsmcPreds), ynatPreds, nil
+}
 
+func computeEvalMetrics(
+	cfg *config.Config,
+	tax *nfc.Taxonomy,
+	ynatVal []data.EncodedExample,
+	ynatPreds []sorter.ArticlePrediction,
+	nsmcTest []data.EncodedExample,
+	nsmcPreds []sorter.ArticlePrediction,
+) *EvalReport {
 	numTopics := tax.NumTopics()
 	topicTP := make([]int, numTopics)
 	topicFP := make([]int, numTopics)
@@ -359,7 +398,7 @@ func Evaluate(
 		NFCRecallAt3:           safeDiv(float64(recallAt3Hits), float64(activeEvalCount)),
 		NFCCoveredClasses:      nfcCovered,
 	}
-	return report, ynatPreds, nil
+	return report
 }
 
 func tensorScalarFloat32(t *tensors.Tensor) float32 {

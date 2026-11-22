@@ -48,6 +48,12 @@ func TestLoadAndOverrides(t *testing.T) {
 	if overridden.Embedding.Provider != "ko_hub_graph" || !overridden.Embedding.FreezeEncoder || overridden.Embedding.PCADim != 16 {
 		t.Fatalf("unexpected embedding overrides: %+v", overridden.Embedding)
 	}
+	for _, validProv := range ValidEmbeddingProviders {
+		overridden.Embedding.Provider = validProv
+		if err := overridden.Validate(); err != nil {
+			t.Fatalf("expected provider %q to validate, got %v", validProv, err)
+		}
+	}
 	overridden.Embedding.Provider = "invalid_provider"
 	if err := overridden.Validate(); err == nil {
 		t.Fatalf("expected validation error for invalid embedding.provider")

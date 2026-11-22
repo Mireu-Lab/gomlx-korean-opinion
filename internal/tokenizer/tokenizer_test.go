@@ -56,3 +56,65 @@ func TestFitEncodeSaveLoad(t *testing.T) {
 		}
 	}
 }
+
+func TestParticleSplitPreventsCrossBoundaryBigramsAndPreservesOrder(t *testing.T) {
+	cfg := config.TokenizerConfig{
+		VocabSize:            500,
+		MaxSeqLen:            32,
+		WordSeqLen:           12,
+		MinFreq:              1,
+		UseCharBigrams:       true,
+		UseCharTrigrams:      true,
+		SplitParticles:       true,
+		ParticleMinStemRunes: 2,
+		KoreanParticles:      []string{"에서", "으로", "와", "가", "는", "을"},
+		PadToken:             "<PAD>",
+		UnkToken:             "<UNK>",
+	}
+
+	artTokens := ExtractTokens("남춘모 부조적 단색화가 펼쳐 보이는 자연", cfg)
+	for _, tok := range artTokens {
+		if tok == "2:화가" {
+			t.Fatalf("particle boundary split failed: cross-boundary bigram 2:화가 should not be generated from 단색화가")
+		}
+	}
+	hasStem := false
+	hasPart := false
+	for _, tok := range artTokens {
+		if tok == "w:단색화" {
+			hasStem = true
+		}
+		if tok == "p:가" {
+			hasPart = true
+		}
+	}
+	if !hasStem || !hasPart {
+		t.Fatalf("expected w:단색화 and p:가 in tokens %v", artTokens)
+	}
+
+	angerTokens := ExtractTokens("시민들 화가 났다", cfg)
+	hasAngerWord := false
+	hasAngerBigram := false
+	for _, tok := range angerTokens {
+		if tok == "w:화가" {
+			hasAngerWord = true
+		}
+		if tok == "2:화가" {
+			hasAngerBigram = true
+		}
+	}
+	if !hasAngerWord || !hasAngerBigram {
+		t.Fatalf("expected bare 2-rune 화가 to keep w:화가 and 2:화가, got %v", angerTokens)
+	}
+
+	wordSeq := ExtractWordTokens("단색화가 펼쳐 자연", cfg)
+	want := []string{"w:단색화", "p:가", "w:펼쳐", "w:자연"}
+	if len(wordSeq) != len(want) {
+		t.Fatalf("word seq mismatch: got %v want %v", wordSeq, want)
+	}
+	for i := range want {
+		if wordSeq[i] != want[i] {
+			t.Fatalf("word seq[%d]: got %q want %q", i, wordSeq[i], want[i])
+		}
+	}
+}

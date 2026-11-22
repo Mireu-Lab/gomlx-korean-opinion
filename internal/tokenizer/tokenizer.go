@@ -45,29 +45,104 @@ func isKeepRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
+// SplitKoreanParticle separates a trailing Korean particle from a Hangul word when the remaining
+// stem has at least minStemRunes Hangul characters (preventing false subword cross-boundary bigrams like 단색화+가 -> 2:화가).
+func SplitKoreanParticle(word string, particles []string, minStemRunes int) (stem, particle string) {
+	if len(particles) == 0 {
+		return word, ""
+	}
+	if minStemRunes < 1 {
+		minStemRunes = 2
+	}
+	runes := []rune(word)
+	if len(runes) <= minStemRunes {
+		return word, ""
+	}
+	for _, r := range runes {
+		if r < 0xAC00 || r > 0xD7A3 {
+			return word, ""
+		}
+	}
+	sorted := make([]string, len(particles))
+	copy(sorted, particles)
+	sort.Slice(sorted, func(i, j int) bool {
+		ri, rj := len([]rune(sorted[i])), len([]rune(sorted[j]))
+		if ri != rj {
+			return ri > rj
+		}
+		return sorted[i] < sorted[j]
+	})
+	for _, p := range sorted {
+		if p == "" {
+			continue
+		}
+		pRunes := []rune(p)
+		if len(runes)-len(pRunes) < minStemRunes {
+			continue
+		}
+		if strings.HasSuffix(word, p) {
+			return string(runes[:len(runes)-len(pRunes)]), p
+		}
+	}
+	return word, ""
+}
+
+// ExtractWordTokens produces sentence-order word/particle tokens (without char n-grams) for sequential encoders.
+func ExtractWordTokens(text string, cfg config.TokenizerConfig) []string {
+	norm := Normalize(text)
+	if norm == "" {
+		return nil
+	}
+	fields := strings.Fields(norm)
+	out := make([]string, 0, len(fields)*2)
+	for _, w := range fields {
+		if cfg.SplitParticles {
+			stem, part := SplitKoreanParticle(w, cfg.KoreanParticles, cfg.ParticleMinStemRunes)
+			out = append(out, "w:"+stem)
+			if part != "" {
+				out = append(out, "p:"+part)
+			}
+		} else {
+			out = append(out, "w:"+w)
+		}
+	}
+	return out
+}
+
 // ExtractTokens produces whole-word tokens followed by optional character bigrams and trigrams.
-// Whole-word tokens are emitted first so fixed sequence truncation preserves full sentence coverage.
+// When SplitParticles is enabled, character n-grams are derived solely from word stems to prevent cross-boundary collisions.
 func ExtractTokens(text string, cfg config.TokenizerConfig) []string {
 	norm := Normalize(text)
 	if norm == "" {
 		return nil
 	}
 	fields := strings.Fields(norm)
-	tokens := make([]string, 0, len(fields)*3)
+	stems := make([]string, 0, len(fields))
+	tokens := make([]string, 0, len(fields)*4)
 	for _, w := range fields {
-		tokens = append(tokens, "w:"+w)
+		if cfg.SplitParticles {
+			stem, part := SplitKoreanParticle(w, cfg.KoreanParticles, cfg.ParticleMinStemRunes)
+			stems = append(stems, stem)
+			tokens = append(tokens, "w:"+stem)
+			if part != "" {
+				tokens = append(tokens, "p:"+part)
+			}
+		} else {
+			stems = append(stems, w)
+			tokens = append(tokens, "w:"+w)
+		}
 	}
 	if cfg.UseCharBigrams {
-		for _, w := range fields {
-			runes := []rune(w)
+		for _, stem := range stems {
+			runes := []rune(stem)
 			for i := 0; i+2 <= len(runes); i++ {
 				tokens = append(tokens, "2:"+string(runes[i:i+2]))
 			}
 		}
 	}
 	if cfg.UseCharTrigrams {
-		for _, w := range fields {
-			runes := []rune(w)
+		for _, stem := range stems {
+			runes := []rune(stem)
 			for i := 0; i+3 <= len(runes); i++ {
 				tokens = append(tokens, "3:"+string(runes[i:i+3]))
 			}
@@ -140,15 +215,27 @@ func (t *Tokenizer) VocabLen() int {
 
 // Encode converts text into a fixed-length int32 token ID slice padded with 0.
 func (t *Tokenizer) Encode(text string) []int32 {
-	out := make([]int32, t.Cfg.MaxSeqLen)
-	extracted := ExtractTokens(text, t.Cfg)
+	return t.encodeSlice(ExtractTokens(text, t.Cfg), t.Cfg.MaxSeqLen)
+}
+
+// EncodeWordSeq converts text into a fixed-length sentence-order word/particle token ID sequence.
+func (t *Tokenizer) EncodeWordSeq(text string) []int32 {
+	seqLen := t.Cfg.WordSeqLen
+	if seqLen <= 0 {
+		seqLen = t.Cfg.MaxSeqLen
+	}
+	return t.encodeSlice(ExtractWordTokens(text, t.Cfg), seqLen)
+}
+
+func (t *Tokenizer) encodeSlice(extracted []string, seqLen int) []int32 {
+	out := make([]int32, seqLen)
 	unkID := int32(1)
 	if id, ok := t.Vocab[t.Cfg.UnkToken]; ok {
 		unkID = id
 	}
 	limit := len(extracted)
-	if limit > t.Cfg.MaxSeqLen {
-		limit = t.Cfg.MaxSeqLen
+	if limit > seqLen {
+		limit = seqLen
 	}
 	for i := 0; i < limit; i++ {
 		if id, ok := t.Vocab[extracted[i]]; ok {

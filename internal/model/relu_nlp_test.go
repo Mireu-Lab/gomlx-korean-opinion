@@ -38,7 +38,7 @@ func TestReLUNLPGraphTrainDecreaseAndCheckpointParity(t *testing.T) {
 	}
 
 	tokCfg := config.TokenizerConfig{
-		VocabSize: 200, MaxSeqLen: 16, MinFreq: 1, UseCharBigrams: true, PadToken: "<PAD>", UnkToken: "<UNK>",
+		VocabSize: 200, MaxSeqLen: 16, WordSeqLen: 10, MinFreq: 1, UseCharBigrams: true, PadToken: "<PAD>", UnkToken: "<UNK>",
 	}
 	ynatRecs := []data.Record{
 		{ID: "y1", Text: "물가 부담 금리 압박 가중", Source: "ynat", TopicID: 1, HasTopic: true},
@@ -74,7 +74,7 @@ func TestReLUNLPGraphTrainDecreaseAndCheckpointParity(t *testing.T) {
 			Topic: 1.0, Sentiment: 1.0, NFC: 1.5, NFCPosWeight: 4.0, MaskEpsilon: 1e-6,
 		},
 	}
-	ds, err := data.NewMultiTaskTrainDataset("test_train", ynatEx, nsmcEx, trainCfg, tokCfg.MaxSeqLen, tax.NumFeelings(), 42)
+	ds, err := data.NewMultiTaskTrainDataset("test_train", ynatEx, nsmcEx, trainCfg, tokCfg.MaxSeqLen, tokCfg.WordSeqLen, tax.NumFeelings(), 42)
 	if err != nil {
 		t.Fatalf("NewMultiTaskTrainDataset: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestReLUNLPGraphTrainDecreaseAndCheckpointParity(t *testing.T) {
 		t.Fatalf("ckptHandler.Save: %v", err)
 	}
 
-	pred1, err := NewPredictor(backend, store, graphCfg, 4, tokCfg.MaxSeqLen)
+	pred1, err := NewPredictor(backend, store, graphCfg, 4, tokCfg.MaxSeqLen, tokCfg.WordSeqLen)
 	if err != nil {
 		t.Fatalf("NewPredictor(orig): %v", err)
 	}
@@ -146,7 +146,7 @@ func TestReLUNLPGraphTrainDecreaseAndCheckpointParity(t *testing.T) {
 		t.Fatalf("PredictExamples(orig): %v", err)
 	}
 
-	pred2, _, err := LoadPredictor(backend, ckptDir, graphCfg, 4, tokCfg.MaxSeqLen)
+	pred2, _, err := LoadPredictor(backend, ckptDir, graphCfg, 4, tokCfg.MaxSeqLen, tokCfg.WordSeqLen)
 	if err != nil {
 		t.Fatalf("LoadPredictor: %v", err)
 	}
@@ -240,7 +240,9 @@ func TestKoHubGraphIntegrationAndCheckpointParity(t *testing.T) {
 	}
 
 	tok := tokenizer.Fit(corpus, config.TokenizerConfig{
-		VocabSize: 300, MaxSeqLen: 16, MinFreq: 1, UseCharBigrams: true, PadToken: "<PAD>", UnkToken: "<UNK>", VocabFilename: "vocab.json",
+		VocabSize: 300, MaxSeqLen: 16, WordSeqLen: 10, MinFreq: 1, UseCharBigrams: true, SplitParticles: true,
+		ParticleMinStemRunes: 2, KoreanParticles: []string{"가", "는", "을", "를", "의", "와", "과"},
+		PadToken: "<PAD>", UnkToken: "<UNK>", VocabFilename: "vocab.json",
 	})
 	g, err := graphkg.BuildGraphFromParsed(rootsCfg, nil, nil, corpus, tax, log)
 	if err != nil {
@@ -263,66 +265,188 @@ func TestKoHubGraphIntegrationAndCheckpointParity(t *testing.T) {
 	}
 	preStore.Finalize()
 
-	cfg.Paths.CheckpointDir = downstreamDir
-	cfg.Tokenizer.MaxSeqLen = 16
-	cfg.Model.EmbedDim = 16
-	cfg.Model.HeadDim = 16
-	cfg.Model.DropoutRate = 0.1
-	cfg.Embedding.Provider = "ko_hub_graph"
-	cfg.Embedding.PretrainCheckpointDir = pretrainDir
-	cfg.Embedding.FreezeEncoder = false
+	rng := rand.New(rand.NewSource(42))
+	ynatEx, _ := data.PrepareExamples(ynatRecs, tok, tax, 0.5, rng)
+	nsmcEx, _ := data.PrepareExamples(nsmcRecs, tok, tax, 0.5, rng)
+
+	providers := []string{
+		"ko_hub_graph",
+		"ko_hub_cnn_relu",
+		"ko_hub_transformer_relu",
+		"ko_hub_lstm_relu",
+	}
+	for _, prov := range providers {
+		t.Run(prov, func(t *testing.T) {
+			provDir := filepath.Join(downstreamDir, prov)
+			cfg.Paths.CheckpointDir = provDir
+			cfg.Tokenizer.MaxSeqLen = 16
+			cfg.Tokenizer.WordSeqLen = 10
+			cfg.Model.EmbedDim = 16
+			cfg.Model.HeadDim = 16
+			cfg.Model.DropoutRate = 0.1
+			cfg.Embedding.Provider = prov
+			cfg.Embedding.PretrainCheckpointDir = pretrainDir
+			cfg.Embedding.FreezeEncoder = false
+			cfg.Embedding.StudentOutDim = 32
+			cfg.Embedding.CNNChannels = 16
+			cfg.Embedding.CNNKernels = []int{2, 3, 4}
+			cfg.Embedding.TransformerLayers = 1
+			cfg.Embedding.TransformerHeads = 2
+			cfg.Embedding.TransformerDim = 32
+			cfg.Embedding.LSTMHidden = 16
+			cfg.Embedding.AttnPoolDim = 16
+			cfg.Training.BatchSize = 4
+			cfg.Training.EvalBatchSize = 4
+			cfg.Training.TrainSteps = 15
+			cfg.Training.LogEverySteps = 15
+			cfg.Training.LearningRate = 0.01
+
+			downStore, err := Train(backend, cfg, tax, tok.VocabLen(), ynatEx, nsmcEx, false, log)
+			if err != nil {
+				t.Fatalf("Train(%s): %v", prov, err)
+			}
+			defer downStore.Finalize()
+
+			graphCfg := BuildGraphConfig(cfg, tok.VocabLen(), tax.NumTopics(), tax.NumFeelings())
+			pred1, err := NewPredictor(backend, downStore, graphCfg, 4, tok.Cfg.MaxSeqLen, tok.Cfg.WordSeqLen)
+			if err != nil {
+				t.Fatalf("NewPredictor(%s): %v", prov, err)
+			}
+			defer pred1.Close()
+			out1, err := pred1.PredictExamples(ynatEx)
+			if err != nil {
+				t.Fatalf("PredictExamples(orig,%s): %v", prov, err)
+			}
+
+			pred2, loadedStore, err := LoadPredictor(backend, provDir, graphCfg, 4, tok.Cfg.MaxSeqLen, tok.Cfg.WordSeqLen)
+			if err != nil {
+				t.Fatalf("LoadPredictor(%s): %v", prov, err)
+			}
+			defer pred2.Close()
+			defer loadedStore.Finalize()
+			out2, err := pred2.PredictExamples(ynatEx)
+			if err != nil {
+				t.Fatalf("PredictExamples(loaded,%s): %v", prov, err)
+			}
+
+			for i := range out1 {
+				if len(out1[i].SemanticEmbed) != cfg.Embedding.StudentOutDim {
+					t.Fatalf("%s expected StudentOutDim=%d, got %d", prov, cfg.Embedding.StudentOutDim, len(out1[i].SemanticEmbed))
+				}
+				var normSq float64
+				for d := range out1[i].SemanticEmbed {
+					v1, v2 := out1[i].SemanticEmbed[d], out2[i].SemanticEmbed[d]
+					if math.IsNaN(float64(v1)) || math.IsInf(float64(v1), 0) {
+						t.Fatalf("%s produced non-finite embedding", prov)
+					}
+					normSq += float64(v1 * v1)
+					if math.Abs(float64(v1-v2)) > 1e-5 {
+						t.Fatalf("%s reload embed mismatch at [%d][%d]: %v vs %v", prov, i, d, v1, v2)
+					}
+				}
+				if math.Abs(math.Sqrt(normSq)-1.0) > 1e-4 {
+					t.Fatalf("%s expected L2-normalized embedding at %d, got norm=%v", prov, i, math.Sqrt(normSq))
+				}
+			}
+		})
+	}
+}
+
+func TestEmbedHeadTrainAndCheckpointParity(t *testing.T) {
+	backend, err := compute.NewWithConfig("go")
+	if err != nil {
+		t.Fatalf("compute.NewWithConfig(go): %v", err)
+	}
+	defer backend.Finalize()
+
+	cfg, err := config.Load(filepath.Join("..", "..", "config", "config.yaml"))
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	tax, err := nfc.LoadTaxonomy(
+		filepath.Join("..", "..", "config", "topics.yaml"),
+		filepath.Join("..", "..", "config", "nfc_taxonomy.yaml"),
+	)
+	if err != nil {
+		t.Fatalf("LoadTaxonomy: %v", err)
+	}
+
+	tmpDir := t.TempDir()
+	ckptDir := filepath.Join(tmpDir, "onnx_head_ckpt")
+	cfg.Paths.CheckpointDir = ckptDir
+	cfg.Embedding.Provider = "onnx_backbone_relu"
 	cfg.Embedding.StudentOutDim = 32
+	cfg.Model.HeadDim = 16
 	cfg.Training.BatchSize = 4
 	cfg.Training.EvalBatchSize = 4
 	cfg.Training.TrainSteps = 20
 	cfg.Training.LogEverySteps = 20
 	cfg.Training.LearningRate = 0.01
 
-	rng := rand.New(rand.NewSource(42))
-	ynatEx, _ := data.PrepareExamples(ynatRecs, tok, tax, 0.5, rng)
-	nsmcEx, _ := data.PrepareExamples(nsmcRecs, tok, tax, 0.5, rng)
-
-	downStore, err := Train(backend, cfg, tax, tok.VocabLen(), ynatEx, nsmcEx, false, log)
+	log, err := logging.NewDualLogger(tmpDir, "status.log", "processing.log", "INFO", false)
 	if err != nil {
-		t.Fatalf("Train(ko_hub_graph): %v", err)
+		t.Fatalf("NewDualLogger: %v", err)
 	}
-	defer downStore.Finalize()
+	defer func() { _ = log.Close() }()
 
-	graphCfg := BuildGraphConfig(cfg, tok.VocabLen(), tax.NumTopics(), tax.NumFeelings())
-	pred1, err := NewPredictor(backend, downStore, graphCfg, 4, tok.Cfg.MaxSeqLen)
+	makeVec := func(seedVal float32) []float32 {
+		v := make([]float32, 64)
+		for i := range v {
+			v[i] = float32(math.Sin(float64(i+1) * float64(seedVal)))
+		}
+		return v
+	}
+	ynatRecs := []data.Record{
+		{ID: "y1", Text: "물가 부담", Source: "ynat", TopicID: 1, HasTopic: true},
+		{ID: "y2", Text: "AI 반도체", Source: "ynat", TopicID: 0, HasTopic: true},
+		{ID: "y3", Text: "정치 갈등", Source: "ynat", TopicID: 6, HasTopic: true},
+		{ID: "y4", Text: "스포츠 우승", Source: "ynat", TopicID: 5, HasTopic: true},
+	}
+	nsmcRecs := []data.Record{
+		{ID: "n1", Text: "최악 분노", Source: "nsmc", TopicID: -1, SentimentLabel: 0, HasSentiment: true},
+		{ID: "n2", Text: "감동 명작", Source: "nsmc", TopicID: -1, SentimentLabel: 1, HasSentiment: true},
+		{ID: "n3", Text: "공포 불안", Source: "nsmc", TopicID: -1, SentimentLabel: 0, HasSentiment: true},
+		{ID: "n4", Text: "여운 그리움", Source: "nsmc", TopicID: -1, SentimentLabel: 1, HasSentiment: true},
+	}
+	ynatVecs := [][]float32{makeVec(1), makeVec(2), makeVec(3), makeVec(4)}
+	nsmcVecs := [][]float32{makeVec(5), makeVec(6), makeVec(7), makeVec(8)}
+
+	rng := rand.New(rand.NewSource(42))
+	ynatEx, _ := PrepareEmbedExamples(ynatRecs, ynatVecs, tax, 0.5, rng)
+	nsmcEx, _ := PrepareEmbedExamples(nsmcRecs, nsmcVecs, tax, 0.5, rng)
+
+	store, err := TrainOnEmbeddings(backend, cfg, tax, 64, ynatEx, nsmcEx, false, log)
 	if err != nil {
-		t.Fatalf("NewPredictor(orig): %v", err)
+		t.Fatalf("TrainOnEmbeddings: %v", err)
+	}
+	defer store.Finalize()
+
+	pred1, err := NewEmbedPredictor(backend, store, cfg, 64, tax.NumTopics(), tax.NumFeelings(), 4)
+	if err != nil {
+		t.Fatalf("NewEmbedPredictor: %v", err)
 	}
 	defer pred1.Close()
-	out1, err := pred1.PredictExamples(ynatEx)
+	out1, err := pred1.PredictEmbedExamples(ynatEx)
 	if err != nil {
-		t.Fatalf("PredictExamples(orig): %v", err)
+		t.Fatalf("PredictEmbedExamples(orig): %v", err)
 	}
 
-	pred2, loadedStore, err := LoadPredictor(backend, downstreamDir, graphCfg, 4, tok.Cfg.MaxSeqLen)
+	pred2, loadedStore, err := LoadEmbedPredictor(backend, ckptDir, cfg, 64, tax.NumTopics(), tax.NumFeelings(), 4)
 	if err != nil {
-		t.Fatalf("LoadPredictor(ko_hub_graph): %v", err)
+		t.Fatalf("LoadEmbedPredictor: %v", err)
 	}
 	defer pred2.Close()
 	defer loadedStore.Finalize()
-	out2, err := pred2.PredictExamples(ynatEx)
+	out2, err := pred2.PredictEmbedExamples(ynatEx)
 	if err != nil {
-		t.Fatalf("PredictExamples(loaded): %v", err)
+		t.Fatalf("PredictEmbedExamples(loaded): %v", err)
 	}
 
 	for i := range out1 {
-		if len(out1[i].SemanticEmbed) != cfg.Embedding.StudentOutDim {
-			t.Fatalf("expected StudentOutDim=%d, got %d", cfg.Embedding.StudentOutDim, len(out1[i].SemanticEmbed))
-		}
-		var normSq float64
 		for d := range out1[i].SemanticEmbed {
-			normSq += float64(out1[i].SemanticEmbed[d] * out1[i].SemanticEmbed[d])
 			if math.Abs(float64(out1[i].SemanticEmbed[d]-out2[i].SemanticEmbed[d])) > 1e-5 {
-				t.Fatalf("ko_hub_graph reload embed mismatch at [%d][%d]: %v vs %v", i, d, out1[i].SemanticEmbed[d], out2[i].SemanticEmbed[d])
+				t.Fatalf("onnx head reload mismatch at [%d][%d]", i, d)
 			}
-		}
-		if math.Abs(math.Sqrt(normSq)-1.0) > 1e-4 {
-			t.Fatalf("expected L2-normalized ko_hub_graph embedding at %d, got norm=%v", i, math.Sqrt(normSq))
 		}
 	}
 }

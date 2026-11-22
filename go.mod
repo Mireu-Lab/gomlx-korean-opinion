@@ -6,6 +6,7 @@ require (
 	github.com/gomlx/compute v0.1.32
 	github.com/gomlx/go-xla v0.4.32
 	github.com/gomlx/gomlx v0.28.38
+	github.com/gomlx/onnx-gomlx v0.5.35
 	github.com/parquet-go/parquet-go v0.32.1
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -14,6 +15,8 @@ require (
 	github.com/andybalholm/brotli v1.3.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/gofrs/flock v0.13.0 // indirect
+	github.com/gomlx/compute-onnx v0.1.32 // indirect
+	github.com/gomlx/exceptions v0.0.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.20.4 // indirect
 	github.com/parquet-go/bitpack v1.0.3 // indirect

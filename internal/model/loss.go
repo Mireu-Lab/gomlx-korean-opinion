@@ -19,6 +19,7 @@ func maskedMean(perExample, mask *Node, maskEpsilon float64) *Node {
 // 1. Masked Sparse Categorical Cross-Entropy for KLUE-YNAT 7 topics
 // 2. Masked Binary Cross-Entropy with Logits for NSMC sentiment
 // 3. Masked Positive-Weighted Multi-Label BCE with Logits for 16 Nuclear Feeling Checklist targets
+// 4. Optional CORAL mean+variance domain alignment between YNAT (news) and NSMC (reviews) semantic embeddings
 func BuildMultiTaskLoss(cfg config.LossWeightsConfig, numTopics int) train.LossFn {
 	return func(labels, predictions []*Node) *Node {
 		topicLogits := predictions[0] // [B, numTopics]
@@ -61,6 +62,36 @@ func BuildMultiTaskLoss(cfg config.LossWeightsConfig, numTopics int) train.LossF
 			Add(MulScalar(topicLoss, cfg.Topic), MulScalar(sentLoss, cfg.Sentiment)),
 			MulScalar(nfcLoss, cfg.NFC),
 		)
+
+		// 4. Optional CORAL mean+variance alignment between YNAT and NSMC semantic embeddings.
+		if cfg.DomainAlign > 0 && len(predictions) >= 4 {
+			emb := predictions[3] // [B, D]
+			eps := Scalar(g, dtypes.Float32, cfg.MaskEpsilon)
+			ySum := ReduceAllSum(topicMask)
+			nSum := ReduceAllSum(sentMask)
+			yDenom := Max(ySum, eps)
+			nDenom := Max(nSum, eps)
+
+			yCol := BroadcastToShape(InsertAxes(topicMask, -1), emb.Shape())
+			nCol := BroadcastToShape(InsertAxes(sentMask, -1), emb.Shape())
+
+			muY := Div(ReduceSum(Mul(emb, yCol), 0), yDenom)
+			muN := Div(ReduceSum(Mul(emb, nCol), 0), nDenom)
+			dMu := Sub(muY, muN)
+			meanAlign := ReduceAllMean(Mul(dMu, dMu))
+
+			centeredY := Mul(Sub(emb, BroadcastToShape(InsertAxes(muY, 0), emb.Shape())), yCol)
+			centeredN := Mul(Sub(emb, BroadcastToShape(InsertAxes(muN, 0), emb.Shape())), nCol)
+			varY := Div(ReduceSum(Mul(centeredY, centeredY), 0), yDenom)
+			varN := Div(ReduceSum(Mul(centeredN, centeredN), 0), nDenom)
+			dVar := Sub(varY, varN)
+			varAlign := ReduceAllMean(Mul(dVar, dVar))
+
+			zeroS := ZerosLike(ySum)
+			bothDomains := ConvertDType(LogicalAnd(GreaterThan(ySum, zeroS), GreaterThan(nSum, zeroS)), dtypes.Float32)
+			coral := Mul(Add(meanAlign, varAlign), bothDomains)
+			total = Add(total, MulScalar(coral, cfg.DomainAlign))
+		}
 		return total
 	}
 }

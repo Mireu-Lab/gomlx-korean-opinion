@@ -19,21 +19,25 @@ type Predictor struct {
 	store       *model.Store
 	batchSize   int
 	seqLen      int
+	wordSeqLen  int
 	numTopics   int
 	numNFC      int
 	semanticDim int
 }
 
 // NewPredictor compiles a deterministic inference executor (training=false, dropout disabled).
-func NewPredictor(backend compute.Backend, store *model.Store, graphCfg GraphConfig, batchSize, seqLen int) (*Predictor, error) {
+func NewPredictor(backend compute.Backend, store *model.Store, graphCfg GraphConfig, batchSize, seqLen, wordSeqLen int) (*Predictor, error) {
 	if batchSize < 1 || seqLen < 1 {
 		return nil, fmt.Errorf("invalid predictor dimensions batchSize=%d seqLen=%d", batchSize, seqLen)
 	}
+	if wordSeqLen < 1 {
+		wordSeqLen = seqLen
+	}
 	var semanticDim int
-	if graphCfg.EmbeddingProvider == "ko_hub_graph" {
+	if IsKoHubProvider(graphCfg.EmbeddingProvider) {
 		semanticDim = graphCfg.StudentOutDim
 		if semanticDim <= 0 {
-			return nil, fmt.Errorf("graphCfg.StudentOutDim must be > 0 for ko_hub_graph")
+			return nil, fmt.Errorf("graphCfg.StudentOutDim must be > 0 for %q", graphCfg.EmbeddingProvider)
 		}
 	} else {
 		if len(graphCfg.HiddenDims) == 0 {
@@ -41,10 +45,10 @@ func NewPredictor(backend compute.Backend, store *model.Store, graphCfg GraphCon
 		}
 		semanticDim = graphCfg.HiddenDims[len(graphCfg.HiddenDims)-1]
 	}
-	exec, err := model.NewExec(backend, store, func(scope *model.Scope, tokens *Node) []*Node {
+	exec, err := model.NewExec(backend, store, func(scope *model.Scope, tokens, wordTokens *Node) []*Node {
 		g := tokens.Graph()
 		scope.Store().SetTraining(g, false)
-		topicLogits, sentLogits, nfcLogits, semanticEmbed := BuildGraphWithEmbedding(scope, tokens, graphCfg, false)
+		topicLogits, sentLogits, nfcLogits, semanticEmbed := BuildGraphWithEmbedding(scope, tokens, wordTokens, graphCfg, false)
 		return []*Node{Softmax(topicLogits, -1), Sigmoid(sentLogits), Sigmoid(nfcLogits), semanticEmbed}
 	})
 	if err != nil {
@@ -55,6 +59,7 @@ func NewPredictor(backend compute.Backend, store *model.Store, graphCfg GraphCon
 		store:       store,
 		batchSize:   batchSize,
 		seqLen:      seqLen,
+		wordSeqLen:  wordSeqLen,
 		numTopics:   graphCfg.NumTopics,
 		numNFC:      graphCfg.NumNFC,
 		semanticDim: semanticDim,
@@ -62,7 +67,7 @@ func NewPredictor(backend compute.Backend, store *model.Store, graphCfg GraphCon
 }
 
 // LoadPredictor loads model weights from checkpointDir into a fresh Store and creates a Predictor.
-func LoadPredictor(backend compute.Backend, checkpointDir string, graphCfg GraphConfig, batchSize, seqLen int) (*Predictor, *model.Store, error) {
+func LoadPredictor(backend compute.Backend, checkpointDir string, graphCfg GraphConfig, batchSize, seqLen, wordSeqLen int) (*Predictor, *model.Store, error) {
 	store := model.NewStore()
 	handler, err := checkpoint.Build(store).Dir(checkpointDir).Immediate().Done()
 	if err != nil {
@@ -75,7 +80,7 @@ func LoadPredictor(backend compute.Backend, checkpointDir string, graphCfg Graph
 	if !has {
 		return nil, nil, fmt.Errorf("no checkpoints found in %q", checkpointDir)
 	}
-	pred, err := NewPredictor(backend, store, graphCfg, batchSize, seqLen)
+	pred, err := NewPredictor(backend, store, graphCfg, batchSize, seqLen, wordSeqLen)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -97,6 +102,7 @@ func (p *Predictor) PredictExamples(examples []data.EncodedExample) ([]sorter.Ar
 	}
 
 	tokensBuf := make([]int32, p.batchSize*p.seqLen)
+	wordTokensBuf := make([]int32, p.batchSize*p.wordSeqLen)
 	for start := 0; start < len(examples); start += p.batchSize {
 		end := start + p.batchSize
 		if end > len(examples) {
@@ -105,13 +111,19 @@ func (p *Predictor) PredictExamples(examples []data.EncodedExample) ([]sorter.Ar
 		count := end - start
 
 		clear(tokensBuf)
+		clear(wordTokensBuf)
 		for i := 0; i < count; i++ {
 			copy(tokensBuf[i*p.seqLen:(i+1)*p.seqLen], examples[start+i].Tokens)
+			if len(examples[start+i].WordTokens) > 0 {
+				copy(wordTokensBuf[i*p.wordSeqLen:(i+1)*p.wordSeqLen], examples[start+i].WordTokens)
+			}
 		}
 
 		inTensor := tensors.FromFlatDataAndDimensions(tokensBuf, p.batchSize, p.seqLen)
-		outputs, err := p.exec.Call(inTensor)
+		wordTensor := tensors.FromFlatDataAndDimensions(wordTokensBuf, p.batchSize, p.wordSeqLen)
+		outputs, err := p.exec.Call(inTensor, wordTensor)
 		_ = inTensor.FinalizeAll()
+		_ = wordTensor.FinalizeAll()
 		if err != nil {
 			return nil, fmt.Errorf("inference batch [%d:%d]: %w", start, end, err)
 		}

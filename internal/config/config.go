@@ -28,6 +28,7 @@ type Config struct {
 	Tokenizer           TokenizerConfig           `yaml:"tokenizer"`
 	Model               ModelConfig               `yaml:"model"`
 	Embedding           EmbeddingConfig           `yaml:"embedding"`
+	ONNXBackbone        ONNXBackboneConfig        `yaml:"onnx_backbone"`
 	Training            TrainingConfig            `yaml:"training"`
 	InferenceAndSorting InferenceAndSortingConfig `yaml:"inference_and_sorting"`
 	Logging             LoggingConfig             `yaml:"logging"`
@@ -65,25 +66,33 @@ type DatasetsConfig struct {
 	YNATValFile   string `yaml:"ynat_val_file"`
 }
 
-// TokenizerConfig configures Korean tokenization and vocabulary bounds.
+// TokenizerConfig configures Korean tokenization, particle splitting, word-order sequence bounds, and vocabulary bounds.
 type TokenizerConfig struct {
-	VocabSize       int    `yaml:"vocab_size"`
-	MaxSeqLen       int    `yaml:"max_seq_len"`
-	MinFreq         int    `yaml:"min_freq"`
-	UseCharBigrams  bool   `yaml:"use_char_bigrams"`
-	UseCharTrigrams bool   `yaml:"use_char_trigrams"`
-	PadToken        string `yaml:"pad_token"`
-	UnkToken        string `yaml:"unk_token"`
-	VocabFilename   string `yaml:"vocab_filename"`
+	VocabSize            int      `yaml:"vocab_size"`
+	MaxSeqLen            int      `yaml:"max_seq_len"`
+	WordSeqLen           int      `yaml:"word_seq_len"`
+	MinFreq              int      `yaml:"min_freq"`
+	UseCharBigrams       bool     `yaml:"use_char_bigrams"`
+	UseCharTrigrams      bool     `yaml:"use_char_trigrams"`
+	SplitParticles       bool     `yaml:"split_particles"`
+	ParticleMinStemRunes int      `yaml:"particle_min_stem_runes"`
+	KoreanParticles      []string `yaml:"korean_particles"`
+	PadToken             string   `yaml:"pad_token"`
+	UnkToken             string   `yaml:"unk_token"`
+	VocabFilename        string   `yaml:"vocab_filename"`
 }
 
 // ValidEmbeddingProviders lists the supported Korean text encoder providers.
 var ValidEmbeddingProviders = []string{
 	"scratch_relu",
 	"ko_hub_graph",
+	"ko_hub_cnn_relu",
+	"ko_hub_transformer_relu",
+	"ko_hub_lstm_relu",
+	"onnx_backbone_relu",
 }
 
-// EmbeddingConfig selects between scratch ReLU embedding and pretrained KO-Hub multilingual student encoder.
+// EmbeddingConfig selects between scratch ReLU, KO-Hub variants (Pool / CNN / Transformer / BiLSTM), and ONNX backbone.
 type EmbeddingConfig struct {
 	Provider              string `yaml:"provider"`
 	RootsConfigFile       string `yaml:"roots_config_file"`
@@ -91,6 +100,28 @@ type EmbeddingConfig struct {
 	FreezeEncoder         bool   `yaml:"freeze_encoder"`
 	StudentOutDim         int    `yaml:"student_out_dim"`
 	PCADim                int    `yaml:"pca_dim"`
+	CNNChannels           int    `yaml:"cnn_channels"`
+	CNNKernels            []int  `yaml:"cnn_kernels"`
+	TransformerLayers     int    `yaml:"transformer_layers"`
+	TransformerHeads      int    `yaml:"transformer_heads"`
+	TransformerDim        int    `yaml:"transformer_dim"`
+	LSTMHidden            int    `yaml:"lstm_hidden"`
+	AttnPoolDim           int    `yaml:"attn_pool_dim"`
+}
+
+// ONNXBackboneConfig configures external pretrained Korean BERT/SBERT ONNX backbone extraction via onnx-gomlx.
+type ONNXBackboneConfig struct {
+	ModelURL          string `yaml:"model_url"`
+	VocabURL          string `yaml:"vocab_url"`
+	CacheDir          string `yaml:"cache_dir"`
+	ModelFile         string `yaml:"model_file"`
+	VocabFile         string `yaml:"vocab_file"`
+	EmbedCacheDir     string `yaml:"embed_cache_dir"`
+	MaxSeqLen         int    `yaml:"max_seq_len"`
+	EmbedDim          int    `yaml:"embed_dim"`
+	EncodeBatchSize   int    `yaml:"encode_batch_size"`
+	MaxTrainPerDomain int    `yaml:"max_train_per_domain"`
+	MaxEvalPerDomain  int    `yaml:"max_eval_per_domain"`
 }
 
 // ModelConfig defines the GoMLX ReLU multi-task MLP architecture.
@@ -120,12 +151,13 @@ type TrainingConfig struct {
 	LossWeights                LossWeightsConfig `yaml:"loss_weights"`
 }
 
-// LossWeightsConfig configures multi-task loss weighting and numerical stability.
+// LossWeightsConfig configures multi-task loss weighting, CORAL domain alignment, and numerical stability.
 type LossWeightsConfig struct {
 	Topic        float64 `yaml:"topic"`
 	Sentiment    float64 `yaml:"sentiment"`
 	NFC          float64 `yaml:"nfc"`
 	NFCPosWeight float64 `yaml:"nfc_pos_weight"`
+	DomainAlign  float64 `yaml:"domain_align"`
 	MaskEpsilon  float64 `yaml:"mask_epsilon"`
 }
 
@@ -321,6 +353,33 @@ func applyEnvOverrides(cfg *Config) error {
 		}
 		cfg.Embedding.PCADim = n
 	}
+	if v := strings.TrimSpace(os.Getenv("NFC_DOMAIN_ALIGN")); v != "" {
+		w, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return fmt.Errorf("invalid NFC_DOMAIN_ALIGN=%q: %w", v, err)
+		}
+		cfg.Training.LossWeights.DomainAlign = w
+	}
+	if v := strings.TrimSpace(os.Getenv("NFC_ONNX_MODEL_URL")); v != "" {
+		cfg.ONNXBackbone.ModelURL = v
+	}
+	if v := strings.TrimSpace(os.Getenv("NFC_ONNX_VOCAB_URL")); v != "" {
+		cfg.ONNXBackbone.VocabURL = v
+	}
+	if v := strings.TrimSpace(os.Getenv("NFC_ONNX_MAX_TRAIN")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("invalid NFC_ONNX_MAX_TRAIN=%q: %w", v, err)
+		}
+		cfg.ONNXBackbone.MaxTrainPerDomain = n
+	}
+	if v := strings.TrimSpace(os.Getenv("NFC_ONNX_MAX_EVAL")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("invalid NFC_ONNX_MAX_EVAL=%q: %w", v, err)
+		}
+		cfg.ONNXBackbone.MaxEvalPerDomain = n
+	}
 	return nil
 }
 
@@ -370,6 +429,12 @@ func (c *Config) Validate() error {
 	if c.Tokenizer.MaxSeqLen < 4 {
 		return fmt.Errorf("tokenizer.max_seq_len must be >= 4, got %d", c.Tokenizer.MaxSeqLen)
 	}
+	if c.Tokenizer.WordSeqLen < 4 {
+		return fmt.Errorf("tokenizer.word_seq_len must be >= 4, got %d", c.Tokenizer.WordSeqLen)
+	}
+	if c.Tokenizer.SplitParticles && c.Tokenizer.ParticleMinStemRunes < 1 {
+		return fmt.Errorf("tokenizer.particle_min_stem_runes must be >= 1 when split_particles=true")
+	}
 	if c.Tokenizer.MinFreq < 1 {
 		return fmt.Errorf("tokenizer.min_freq must be >= 1, got %d", c.Tokenizer.MinFreq)
 	}
@@ -405,9 +470,36 @@ func (c *Config) Validate() error {
 	if c.Embedding.PCADim < 0 {
 		return fmt.Errorf("embedding.pca_dim must be >= 0, got %d", c.Embedding.PCADim)
 	}
-	if c.Embedding.Provider == "ko_hub_graph" {
+	if c.Embedding.Provider != "scratch_relu" && c.Embedding.Provider != "onnx_backbone_relu" {
 		if strings.TrimSpace(c.Embedding.RootsConfigFile) == "" || strings.TrimSpace(c.Embedding.PretrainCheckpointDir) == "" {
-			return fmt.Errorf("embedding.roots_config_file and pretrain_checkpoint_dir must not be empty when provider=ko_hub_graph")
+			return fmt.Errorf("embedding.roots_config_file and pretrain_checkpoint_dir must not be empty for %q", c.Embedding.Provider)
+		}
+	}
+	if c.Embedding.CNNChannels < 8 || len(c.Embedding.CNNKernels) == 0 {
+		return fmt.Errorf("embedding cnn_channels >= 8 and non-empty cnn_kernels required")
+	}
+	for _, k := range c.Embedding.CNNKernels {
+		if k < 1 {
+			return fmt.Errorf("embedding.cnn_kernels entries must be >= 1, got %d", k)
+		}
+	}
+	if c.Embedding.TransformerLayers < 1 || c.Embedding.TransformerHeads < 1 || c.Embedding.TransformerDim < 8 ||
+		c.Embedding.TransformerDim%c.Embedding.TransformerHeads != 0 {
+		return fmt.Errorf("embedding transformer_layers/heads/dim invalid (dim must be divisible by heads)")
+	}
+	if c.Embedding.LSTMHidden < 8 || c.Embedding.AttnPoolDim < 8 {
+		return fmt.Errorf("embedding lstm_hidden and attn_pool_dim must be >= 8")
+	}
+	if c.Embedding.Provider == "onnx_backbone_relu" {
+		ob := c.ONNXBackbone
+		if strings.TrimSpace(ob.ModelURL) == "" || strings.TrimSpace(ob.VocabURL) == "" ||
+			strings.TrimSpace(ob.CacheDir) == "" || strings.TrimSpace(ob.ModelFile) == "" ||
+			strings.TrimSpace(ob.VocabFile) == "" || strings.TrimSpace(ob.EmbedCacheDir) == "" {
+			return fmt.Errorf("onnx_backbone URLs and paths must not be empty")
+		}
+		if ob.MaxSeqLen < 4 || ob.EmbedDim < 8 || ob.EncodeBatchSize < 1 ||
+			ob.MaxTrainPerDomain < 0 || ob.MaxEvalPerDomain < 0 {
+			return fmt.Errorf("onnx_backbone dimensions/batch/caps invalid")
 		}
 	}
 	if c.Training.BatchSize < 1 || c.Training.EvalBatchSize < 1 {
@@ -430,7 +522,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("training.nfc_negative_calibration_prob must be in [0, 1]")
 	}
 	if c.Training.LossWeights.Topic < 0 || c.Training.LossWeights.Sentiment < 0 || c.Training.LossWeights.NFC < 0 ||
-		c.Training.LossWeights.NFCPosWeight <= 0 || c.Training.LossWeights.MaskEpsilon <= 0 {
+		c.Training.LossWeights.DomainAlign < 0 || c.Training.LossWeights.NFCPosWeight <= 0 || c.Training.LossWeights.MaskEpsilon <= 0 {
 		return fmt.Errorf("training.loss_weights must be valid non-negative weights with positive nfc_pos_weight and mask_epsilon")
 	}
 	if !slices.Contains(ValidSortModes, c.InferenceAndSorting.DefaultSortMode) {

@@ -24,17 +24,47 @@ datasets:
   ynat_val_file: "klue_ynat_validation.parquet"
 
 tokenizer:
-  vocab_size: 32000
+  vocab_size: 24000
   max_seq_len: 48
+  word_seq_len: 20
   min_freq: 2
   use_char_bigrams: true
   use_char_trigrams: true
+  split_particles: true
+  particle_min_stem_runes: 2
+  korean_particles:
+    - "에서"
+    - "에게"
+    - "으로"
+    - "부터"
+    - "까지"
+    - "처럼"
+    - "보다"
+    - "하고"
+    - "이라"
+    - "라는"
+    - "에는"
+    - "에도"
+    - "에만"
+    - "은"
+    - "는"
+    - "이"
+    - "가"
+    - "을"
+    - "를"
+    - "의"
+    - "에"
+    - "로"
+    - "와"
+    - "과"
+    - "도"
+    - "만"
   pad_token: "<PAD>"
   unk_token: "<UNK>"
   vocab_filename: "vocab.json"
 
 model:
-  embed_dim: 96
+  embed_dim: 64
   hidden_dims:
     - 128
     - 64
@@ -49,6 +79,29 @@ embedding:
   freeze_encoder: false
   student_out_dim: 128
   pca_dim: 24
+  cnn_channels: 64
+  cnn_kernels:
+    - 2
+    - 3
+    - 4
+  transformer_layers: 2
+  transformer_heads: 4
+  transformer_dim: 128
+  lstm_hidden: 48
+  attn_pool_dim: 64
+
+onnx_backbone:
+  model_url: "https://huggingface.co/leewaay/klue-roberta-base-klueNLI-klueSTS-MSL128/resolve/main/onnx/model.onnx"
+  vocab_url: "https://huggingface.co/leewaay/klue-roberta-base-klueNLI-klueSTS-MSL128/resolve/main/onnx/vocab.txt"
+  cache_dir: "data/onnx_backbone"
+  model_file: "klue_roberta_sts_nli.onnx"
+  vocab_file: "klue_roberta_vocab.txt"
+  embed_cache_dir: "data/onnx_backbone/embeddings_cache"
+  max_seq_len: 32
+  embed_dim: 768
+  encode_batch_size: 16
+  max_train_per_domain: 2000
+  max_eval_per_domain: 1000
 
 training:
   batch_size: 64
@@ -69,6 +122,7 @@ training:
     sentiment: 1.0
     nfc: 1.5
     nfc_pos_weight: 6.0
+    domain_align: 0.15
     mask_epsilon: 0.000001
 
 inference_and_sorting:

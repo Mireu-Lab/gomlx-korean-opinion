@@ -39,13 +39,13 @@ edge_weights:
 
 pretrain:
   checkpoint_dir: "checkpoints/ko_hub_pretrain"
-  embed_dim: 96
+  embed_dim: 64
   out_dim: 128
   root_embed_dim: 128
   attn_dim: 64
   max_roots_per_view: 4
   batch_size: 64
-  pretrain_steps: 1000
+  pretrain_steps: 600
   log_every_steps: 100
   checkpoint_keep: 2
   optimizer: "adamw"
