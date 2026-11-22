@@ -24,7 +24,7 @@ datasets:
   ynat_val_file: "klue_ynat_validation.parquet"
 
 tokenizer:
-  vocab_size: 20000
+  vocab_size: 32000
   max_seq_len: 48
   min_freq: 2
   use_char_bigrams: true
@@ -34,13 +34,21 @@ tokenizer:
   vocab_filename: "vocab.json"
 
 model:
-  embed_dim: 64
+  embed_dim: 96
   hidden_dims:
     - 128
     - 64
   head_dim: 64
-  dropout_rate: 0.2
+  dropout_rate: 0.15
   activation: "relu"
+
+embedding:
+  provider: "scratch_relu"
+  roots_config_file: "config/multilingual_roots.yaml"
+  pretrain_checkpoint_dir: "checkpoints/ko_hub_pretrain"
+  freeze_encoder: false
+  student_out_dim: 128
+  pca_dim: 24
 
 training:
   batch_size: 64

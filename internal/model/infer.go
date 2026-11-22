@@ -29,10 +29,18 @@ func NewPredictor(backend compute.Backend, store *model.Store, graphCfg GraphCon
 	if batchSize < 1 || seqLen < 1 {
 		return nil, fmt.Errorf("invalid predictor dimensions batchSize=%d seqLen=%d", batchSize, seqLen)
 	}
-	if len(graphCfg.HiddenDims) == 0 {
-		return nil, fmt.Errorf("graphCfg.HiddenDims must not be empty")
+	var semanticDim int
+	if graphCfg.EmbeddingProvider == "ko_hub_graph" {
+		semanticDim = graphCfg.StudentOutDim
+		if semanticDim <= 0 {
+			return nil, fmt.Errorf("graphCfg.StudentOutDim must be > 0 for ko_hub_graph")
+		}
+	} else {
+		if len(graphCfg.HiddenDims) == 0 {
+			return nil, fmt.Errorf("graphCfg.HiddenDims must not be empty")
+		}
+		semanticDim = graphCfg.HiddenDims[len(graphCfg.HiddenDims)-1]
 	}
-	semanticDim := graphCfg.HiddenDims[len(graphCfg.HiddenDims)-1]
 	exec, err := model.NewExec(backend, store, func(scope *model.Scope, tokens *Node) []*Node {
 		g := tokens.Graph()
 		scope.Store().SetTraining(g, false)

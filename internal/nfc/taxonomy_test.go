@@ -36,4 +36,28 @@ func TestLoadTaxonomyAndWeakAnnotate(t *testing.T) {
 	if noneMatched != 0 {
 		t.Fatalf("expected 0 matches on neutral sentence, got %d", noneMatched)
 	}
+
+	// Regression tests for homonym disambiguation ("화가") and rare feelings ("외로움", "소외").
+	for _, artHeadline := range []string{
+		"남춘모 부조적 단색화가 펼쳐 보이는 자연",
+		"차병원 한국여류화가협회와 소녀가장 돕기 자선전시회 개최",
+	} {
+		tArt, _, _ := tax.WeakAnnotate(artHeadline)
+		if tArt[8] != 0 {
+			t.Fatalf("homonym regression: %q should not trigger anger (id=8), got %v", artHeadline, tArt[8])
+		}
+	}
+
+	tAnger, _, _ := tax.WeakAnnotate("시민들 화가 났다 거센 분노")
+	if tAnger[8] != 1.0 {
+		t.Fatalf("expected true anger context to trigger anger (id=8)")
+	}
+	tLonely, _, _ := tax.WeakAnnotate("독거노인 1인 가구 고독감 심화")
+	if tLonely[4] != 1.0 {
+		t.Fatalf("expected loneliness (id=4) to trigger")
+	}
+	tAlien, _, _ := tax.WeakAnnotate("비수도권 농어촌 소외지역 낙후 불평등")
+	if tAlien[14] != 1.0 {
+		t.Fatalf("expected alienation (id=14) to trigger")
+	}
 }

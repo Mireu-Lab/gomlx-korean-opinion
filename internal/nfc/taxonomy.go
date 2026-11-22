@@ -29,8 +29,10 @@ type FeelingDef struct {
 	PolarityAffinity string   `yaml:"polarity_affinity" json:"polarity_affinity"`
 	Description      string   `yaml:"description" json:"description"`
 	Keywords         []string `yaml:"keywords" json:"keywords"`
+	ExcludePatterns  []string `yaml:"exclude_patterns,omitempty" json:"exclude_patterns,omitempty"`
 
-	normalizedKeywords []string
+	normalizedKeywords        []string
+	normalizedExcludePatterns []string
 }
 
 type topicsFile struct {
@@ -123,6 +125,19 @@ func LoadTaxonomy(topicsPath, nfcPath string) (*Taxonomy, error) {
 			seenKW[norm] = struct{}{}
 			f.normalizedKeywords = append(f.normalizedKeywords, norm)
 		}
+		seenEx := make(map[string]struct{}, len(f.ExcludePatterns))
+		f.normalizedExcludePatterns = make([]string, 0, len(f.ExcludePatterns))
+		for _, ex := range f.ExcludePatterns {
+			norm := strings.ToLower(strings.TrimSpace(ex))
+			if norm == "" {
+				continue
+			}
+			if _, ok := seenEx[norm]; ok {
+				continue
+			}
+			seenEx[norm] = struct{}{}
+			f.normalizedExcludePatterns = append(f.normalizedExcludePatterns, norm)
+		}
 		feelingsByID[f.ID] = *f
 	}
 
@@ -173,18 +188,32 @@ func (t *Taxonomy) SortedTopicsByDisplayOrder() []TopicDef {
 // WeakAnnotate scans normalized text against the Nuclear Feeling Checklist keyword stems.
 // It returns binary multi-label targets (0/1), calibrated lexical scores in [0, 1], and total matched categories.
 func (t *Taxonomy) WeakAnnotate(text string) (targets []float32, scores []float32, matchedCount int) {
+	targets, scores, matchedCount, _ = t.WeakAnnotateDetailed(text)
+	return targets, scores, matchedCount
+}
+
+// WeakAnnotateDetailed additionally reports whether any homonym exclude_patterns matched,
+// allowing training preparation to treat disambiguated compounds as explicit negative calibration examples.
+func (t *Taxonomy) WeakAnnotateDetailed(text string) (targets []float32, scores []float32, matchedCount int, guardTriggered bool) {
 	n := len(t.Feelings)
 	targets = make([]float32, n)
 	scores = make([]float32, n)
 	norm := strings.ToLower(strings.TrimSpace(text))
 	if norm == "" {
-		return targets, scores, 0
+		return targets, scores, 0, false
 	}
 	sat := float32(t.LexicalSaturation)
 	for i, f := range t.Feelings {
+		cleanNorm := norm
+		for _, pat := range f.normalizedExcludePatterns {
+			if strings.Contains(cleanNorm, pat) {
+				guardTriggered = true
+				cleanNorm = strings.ReplaceAll(cleanNorm, pat, " ")
+			}
+		}
 		hits := 0
 		for _, kw := range f.normalizedKeywords {
-			if strings.Contains(norm, kw) {
+			if strings.Contains(cleanNorm, kw) {
 				hits++
 			}
 		}
@@ -198,5 +227,5 @@ func (t *Taxonomy) WeakAnnotate(text string) (targets []float32, scores []float3
 			matchedCount++
 		}
 	}
-	return targets, scores, matchedCount
+	return targets, scores, matchedCount, guardTriggered
 }

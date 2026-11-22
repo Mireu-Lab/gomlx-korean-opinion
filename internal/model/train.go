@@ -18,6 +18,7 @@ import (
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/data"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/logging"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/nfc"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/pretrain"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/sorter"
 )
 
@@ -54,13 +55,16 @@ type EvalReport struct {
 // BuildGraphConfig maps external config + runtime dimensions into GraphConfig.
 func BuildGraphConfig(cfg *config.Config, vocabLen, numTopics, numNFC int) GraphConfig {
 	return GraphConfig{
-		VocabSize:   vocabLen,
-		EmbedDim:    cfg.Model.EmbedDim,
-		HiddenDims:  cfg.Model.HiddenDims,
-		HeadDim:     cfg.Model.HeadDim,
-		DropoutRate: cfg.Model.DropoutRate,
-		NumTopics:   numTopics,
-		NumNFC:      numNFC,
+		VocabSize:         vocabLen,
+		EmbedDim:          cfg.Model.EmbedDim,
+		HiddenDims:        cfg.Model.HiddenDims,
+		HeadDim:           cfg.Model.HeadDim,
+		DropoutRate:       cfg.Model.DropoutRate,
+		NumTopics:         numTopics,
+		NumNFC:            numNFC,
+		EmbeddingProvider: cfg.Embedding.Provider,
+		StudentOutDim:     cfg.Embedding.StudentOutDim,
+		FreezeEncoder:     cfg.Embedding.FreezeEncoder,
 	}
 }
 
@@ -100,6 +104,19 @@ func Train(
 		Done()
 	if err != nil {
 		return nil, fmt.Errorf("init checkpoint handler: %w", err)
+	}
+
+	if !resume && cfg.Embedding.Provider == "ko_hub_graph" {
+		transferred, err := pretrain.LoadPretrainedStudentWeights(
+			cfg.Embedding.PretrainCheckpointDir,
+			store,
+			cfg.Embedding.FreezeEncoder,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("load pretrained KO-Hub student weights: %w", err)
+		}
+		log.Info("trainer", "loaded %d pretrained /%s/ tensors from %s (freeze=%t)",
+			transferred, pretrain.StudentScopeName, cfg.Embedding.PretrainCheckpointDir, cfg.Embedding.FreezeEncoder)
 	}
 
 	trainDS, err := data.NewMultiTaskTrainDataset(

@@ -153,3 +153,37 @@ func TestTopicCoherenceAndHumanEvalScoring(t *testing.T) {
 		t.Fatalf("unexpected human eval score: %+v", sc)
 	}
 }
+
+func TestProjectPCA(t *testing.T) {
+	vectors := make([][]float32, 30)
+	for i := 0; i < 30; i++ {
+		v := make([]float32, 64)
+		clusterIdx := i / 10
+		v[clusterIdx] = 5.0
+		v[3] = float32(i%10) * 0.2
+		v[4+i%4] += 0.05
+		vectors[i] = v
+	}
+	proj, expVar := ProjectPCA(vectors, 8)
+	if len(proj) != len(vectors) {
+		t.Fatalf("expected %d projected vectors, got %d", len(vectors), len(proj))
+	}
+	if len(proj[0]) != 8 {
+		t.Fatalf("expected reduced dimension 8, got %d", len(proj[0]))
+	}
+	if expVar < 0.90 {
+		t.Fatalf("expected explained variance >= 0.90 on structured 64d vectors, got %.4f", expVar)
+	}
+	for i, pv := range proj {
+		var normSq float64
+		for _, val := range pv {
+			if math.IsNaN(float64(val)) || math.IsInf(float64(val), 0) {
+				t.Fatalf("non-finite PCA coordinate at doc %d", i)
+			}
+			normSq += float64(val * val)
+		}
+		if math.Abs(math.Sqrt(normSq)-1.0) > 1e-4 {
+			t.Fatalf("expected L2-normalized PCA output at %d, got norm=%.6f", i, math.Sqrt(normSq))
+		}
+	}
+}

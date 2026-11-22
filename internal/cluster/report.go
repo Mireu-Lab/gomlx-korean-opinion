@@ -50,6 +50,22 @@ func RunClusteringPipeline(
 		}
 	}
 
+	if cfg.Embedding.PCADim > 0 && len(docs) >= 2 && len(docs[0].SemanticEmbed) > cfg.Embedding.PCADim {
+		origDim := len(docs[0].SemanticEmbed)
+		rawEmbeds := make([][]float32, len(docs))
+		for i := range docs {
+			rawEmbeds[i] = docs[i].SemanticEmbed
+		}
+		projEmbeds, explainedVar := ProjectPCA(rawEmbeds, cfg.Embedding.PCADim)
+		for i := range docs {
+			docs[i].SemanticEmbed = projEmbeds[i]
+		}
+		if log != nil {
+			log.Info("cluster_pca", "reduced semantic embeddings %dd -> %dd (explained_var=%.2f%%)",
+				origDim, cfg.Embedding.PCADim, explainedVar*100)
+		}
+	}
+
 	// Method 1: Hybrid Embedding + Pure-Go HDBSCAN Density Clustering.
 	vectors := BuildHybridVectors(docs, cfg.Clustering.FeatureWeights)
 	for i := range docs {

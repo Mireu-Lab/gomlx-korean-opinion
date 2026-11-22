@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/gomlx/compute"
@@ -15,9 +16,11 @@ import (
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/cluster"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/config"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/data"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/graphkg"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/logging"
 	nfcmodel "github.com/Mireu-Lab/gomlx-korean-opinion/internal/model"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/nfc"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/pretrain"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/sorter"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/tokenizer"
 )
@@ -36,6 +39,12 @@ func main() {
 	sortBy := fs.String("sort-by", "", "Override sort mode (topic_nfc_intensity|nfc_intensity|intensity_desc|sentiment_neg_desc)")
 	inputPath := fs.String("input", "", "Optional external file (.jsonl/.csv/.tsv for analyze, or annotated CSV for eval-human)")
 	outputDirOverride := fs.String("output-dir", "", "Override paths.output_dir")
+	checkpointDirOverride := fs.String("checkpoint-dir", "", "Override paths.checkpoint_dir")
+	providerOverride := fs.String("provider", "", "Override embedding.provider (scratch_relu|ko_hub_graph)")
+	rootsConfigOverride := fs.String("roots-config", "", "Override embedding.roots_config_file")
+	pretrainDirOverride := fs.String("pretrain-dir", "", "Override embedding.pretrain_checkpoint_dir")
+	freezeEncoderOverride := fs.String("freeze-encoder", "", "Override embedding.freeze_encoder (true|false)")
+	pcaDimOverride := fs.Int("pca-dim", -1, "Override embedding.pca_dim (>=0)")
 	limit := fs.Int("limit", 0, "Optional maximum number of articles to analyze (0 = all)")
 	resume := fs.Bool("resume", false, "Resume training from existing checkpoint instead of resetting")
 	if err := fs.Parse(os.Args[2:]); err != nil {
@@ -62,6 +71,29 @@ func main() {
 	if strings.TrimSpace(*outputDirOverride) != "" {
 		cfg.Paths.OutputDir = strings.TrimSpace(*outputDirOverride)
 	}
+	if strings.TrimSpace(*checkpointDirOverride) != "" {
+		cfg.Paths.CheckpointDir = strings.TrimSpace(*checkpointDirOverride)
+	}
+	if strings.TrimSpace(*providerOverride) != "" {
+		cfg.Embedding.Provider = strings.TrimSpace(*providerOverride)
+	}
+	if strings.TrimSpace(*rootsConfigOverride) != "" {
+		cfg.Embedding.RootsConfigFile = strings.TrimSpace(*rootsConfigOverride)
+	}
+	if strings.TrimSpace(*pretrainDirOverride) != "" {
+		cfg.Embedding.PretrainCheckpointDir = strings.TrimSpace(*pretrainDirOverride)
+	}
+	if strings.TrimSpace(*freezeEncoderOverride) != "" {
+		b, parseErr := strconv.ParseBool(strings.TrimSpace(*freezeEncoderOverride))
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "invalid --freeze-encoder=%q: %v\n", *freezeEncoderOverride, parseErr)
+			os.Exit(1)
+		}
+		cfg.Embedding.FreezeEncoder = b
+	}
+	if *pcaDimOverride >= 0 {
+		cfg.Embedding.PCADim = *pcaDimOverride
+	}
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "config validation error: %v\n", err)
 		os.Exit(1)
@@ -80,7 +112,7 @@ func main() {
 	}
 	defer func() { _ = log.Close() }()
 
-	if err := runCommand(subcmd, cfg, *inputPath, *limit, *resume, log); err != nil {
+	if err := runCommand(subcmd, cfg, *inputPath, *limit, *resume, *stepsOverride, *batchOverride, log); err != nil {
 		log.Status(strings.ToUpper(subcmd), "FAILED", "%v", err)
 		log.Error("cli", "command %q failed: %v", subcmd, err)
 		os.Exit(1)
@@ -93,6 +125,8 @@ func runCommand(
 	inputPath string,
 	limit int,
 	resume bool,
+	stepsOverride int,
+	batchOverride int,
 	log *logging.DualLogger,
 ) error {
 	tax, err := nfc.LoadTaxonomy(cfg.Paths.TopicsFile, cfg.Paths.NFCTaxonomyFile)
@@ -105,6 +139,11 @@ func runCommand(
 	switch subcmd {
 	case "download":
 		return stageDownload(cfg, log)
+	case "build-graph":
+		_, err := stageBuildGraph(cfg, tax, log)
+		return err
+	case "pretrain":
+		return stagePretrain(cfg, tax, stepsOverride, batchOverride, log)
 	case "train":
 		backend, _, _, _, err := stageTrain(cfg, tax, resume, log)
 		if backend != nil {
@@ -122,6 +161,14 @@ func runCommand(
 	case "pipeline":
 		if err := stageDownload(cfg, log); err != nil {
 			return err
+		}
+		if cfg.Embedding.Provider == "ko_hub_graph" {
+			metaPath := filepath.Join(cfg.Embedding.PretrainCheckpointDir, "pretrain_meta.json")
+			if _, statErr := os.Stat(metaPath); statErr != nil {
+				if err := stagePretrain(cfg, tax, 0, 0, log); err != nil {
+					return err
+				}
+			}
 		}
 		backend, store, tok, ynatVal, err := stageTrain(cfg, tax, resume, log)
 		if err != nil {
@@ -184,6 +231,107 @@ func stageDownload(cfg *config.Config, log *logging.DualLogger) error {
 	return nil
 }
 
+func loadTrainingCorpusTexts(cfg *config.Config, log *logging.DualLogger) ([]string, error) {
+	if err := data.EnsureDatasets(cfg, log); err != nil {
+		return nil, err
+	}
+	ynatRecs, err := data.LoadYNAT(cfg.YNATTrainPath())
+	if err != nil {
+		return nil, err
+	}
+	nsmcRecs, _, err := data.LoadNSMC(cfg.NSMCTrainPath())
+	if err != nil {
+		return nil, err
+	}
+	corpus := make([]string, 0, len(ynatRecs)+len(nsmcRecs))
+	for _, r := range ynatRecs {
+		corpus = append(corpus, r.Text)
+	}
+	for _, r := range nsmcRecs {
+		corpus = append(corpus, r.Text)
+	}
+	return corpus, nil
+}
+
+func stageBuildGraph(cfg *config.Config, tax *nfc.Taxonomy, log *logging.DualLogger) (*graphkg.Graph, error) {
+	rootsCfg, err := graphkg.LoadRootsConfig(cfg.Embedding.RootsConfigFile)
+	if err != nil {
+		return nil, err
+	}
+	log.Status("BUILD_GRAPH", "START", "downloading/verifying multilingual roots and building KO-Hub CSR graph")
+	if err := graphkg.EnsureSources(rootsCfg, log); err != nil {
+		return nil, err
+	}
+	corpus, err := loadTrainingCorpusTexts(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	g, err := graphkg.BuildGraph(rootsCfg, corpus, tax, log)
+	if err != nil {
+		return nil, err
+	}
+	if err := g.Save(rootsCfg.GraphFile); err != nil {
+		return nil, err
+	}
+	log.Info("graphkg", "saved KO-Hub heterogeneous CSR graph to %s", rootsCfg.GraphFile)
+	return g, nil
+}
+
+func stagePretrain(cfg *config.Config, tax *nfc.Taxonomy, stepsOverride, batchOverride int, log *logging.DualLogger) error {
+	rootsCfg, err := graphkg.LoadRootsConfig(cfg.Embedding.RootsConfigFile)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfg.Embedding.PretrainCheckpointDir) != "" {
+		rootsCfg.Pretrain.CheckpointDir = cfg.Embedding.PretrainCheckpointDir
+	}
+	if stepsOverride > 0 {
+		rootsCfg.Pretrain.PretrainSteps = stepsOverride
+	}
+	if batchOverride > 0 {
+		rootsCfg.Pretrain.BatchSize = batchOverride
+	}
+	rootsCfg.Pretrain.EmbedDim = cfg.Model.EmbedDim
+	rootsCfg.Pretrain.OutDim = cfg.Embedding.StudentOutDim
+
+	log.Status("PRETRAIN", "START", "preparing KO-Hub graph & corpus for contrastive pretraining (steps=%d, out_dim=%d)",
+		rootsCfg.Pretrain.PretrainSteps, rootsCfg.Pretrain.OutDim)
+
+	var g *graphkg.Graph
+	if _, statErr := os.Stat(rootsCfg.GraphFile); statErr == nil {
+		g, err = graphkg.Load(rootsCfg.GraphFile)
+		if err != nil {
+			return err
+		}
+		log.Info("pretrain", "loaded cached KO-Hub graph from %s (nodes=%d edges=%d)",
+			rootsCfg.GraphFile, g.Stats.NumNodes, g.Stats.NumEdges)
+	} else {
+		g, err = stageBuildGraph(cfg, tax, log)
+		if err != nil {
+			return err
+		}
+	}
+
+	corpus, err := loadTrainingCorpusTexts(cfg, log)
+	if err != nil {
+		return err
+	}
+	tok := tokenizer.Fit(corpus, cfg.Tokenizer)
+	log.Info("pretrain", "fitted shared KO-Hub tokenizer vocab=%d", tok.VocabLen())
+
+	backend, err := compute.NewWithConfig(cfg.Runtime.Backend)
+	if err != nil {
+		return fmt.Errorf("init GoMLX backend %q: %w", cfg.Runtime.Backend, err)
+	}
+	defer backend.Finalize()
+
+	store, _, err := pretrain.TrainPretrain(backend, &rootsCfg.Pretrain, tok, g, corpus, cfg.Runtime.Seed, cfg.Tokenizer.VocabFilename, log)
+	if store != nil {
+		store.Finalize()
+	}
+	return err
+}
+
 func stageTrain(
 	cfg *config.Config,
 	tax *nfc.Taxonomy,
@@ -215,6 +363,22 @@ func stageTrain(
 			tok = loadedTok
 			log.Info("tokenizer", "loaded existing vocab (%d tokens) from %s", tok.VocabLen(), cfg.VocabPath())
 		}
+	} else if cfg.Embedding.Provider == "ko_hub_graph" {
+		pretrainTokPath := filepath.Join(cfg.Embedding.PretrainCheckpointDir, cfg.Tokenizer.VocabFilename)
+		loadedTok, err := tokenizer.Load(pretrainTokPath)
+		if err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("load KO-Hub pretrain vocab %q (run 'pretrain' first): %w", pretrainTokPath, err)
+		}
+		meta, err := pretrain.LoadPretrainMeta(cfg.Embedding.PretrainCheckpointDir)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		if meta.EmbedDim != cfg.Model.EmbedDim || meta.OutDim != cfg.Embedding.StudentOutDim {
+			return nil, nil, nil, nil, fmt.Errorf("pretrain meta dims (embed=%d, out=%d) do not match config (embed=%d, student_out_dim=%d)",
+				meta.EmbedDim, meta.OutDim, cfg.Model.EmbedDim, cfg.Embedding.StudentOutDim)
+		}
+		tok = loadedTok
+		log.Info("tokenizer", "reusing KO-Hub pretrain vocab (%d tokens) from %s", tok.VocabLen(), pretrainTokPath)
 	}
 	if tok == nil {
 		corpus := make([]string, 0, len(ynatTrainRecs)+len(nsmcTrainRecs))
@@ -593,23 +757,31 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, `Usage: opinion-analyzer <command> [flags]
 
 Commands:
-  download    Download NSMC and KLUE-YNAT datasets configured in config.yaml
-  train       Fit Korean tokenizer and train GoMLX ReLU multi-task model
-  eval        Evaluate saved checkpoint on KLUE-YNAT val, NSMC test, and NFC
-  analyze     Classify and sort news articles by topic, Nuclear Feeling, and intensity
-  cluster     Run 3-method clustering (HDBSCAN, Entity Anchors, Hierarchical Topics) & 3-stage validation
-  eval-human  Score completed human_eval_sample.csv (Agreement Rate & Cohen's Kappa)
-  pipeline    Run end-to-end: download -> train -> eval -> analyze -> cluster
+  download     Download NSMC and KLUE-YNAT datasets configured in config.yaml
+  build-graph  Download Unihan/OMW sources and build KO-Hub multilingual roots CSR graph
+  pretrain     Run GoMLX Context-Aware Soft Edge contrastive pretraining for KO-Hub Student
+  train        Fit Korean tokenizer and train GoMLX ReLU multi-task model
+  eval         Evaluate saved checkpoint on KLUE-YNAT val, NSMC test, and NFC
+  analyze      Classify and sort news articles by topic, Nuclear Feeling, and intensity
+  cluster      Run 3-method clustering (HDBSCAN, Entity Anchors, Hierarchical Topics) & 3-stage validation
+  eval-human   Score completed human_eval_sample.csv (Agreement Rate & Cohen's Kappa)
+  pipeline     Run end-to-end: download -> (pretrain if ko_hub_graph) -> train -> eval -> analyze -> cluster
 
 Flags:
-  --config <path>       Path to config YAML (default: config/config.yaml)
-  --backend <name>      Override runtime.backend (go, xla:cpu, etc.)
-  --steps <int>         Override training.train_steps
-  --batch-size <int>    Override training.batch_size
-  --sort-by <mode>      topic_nfc_intensity | nfc_intensity | intensity_desc | sentiment_neg_desc
-  --input <path>        Custom file (.jsonl/.csv/.tsv for analyze, or annotated CSV for eval-human)
-  --output-dir <path>   Override paths.output_dir
-  --limit <int>         Max articles to analyze (0 = all)
-  --resume              Resume training from existing checkpoint
+  --config <path>         Path to config YAML (default: config/config.yaml)
+  --backend <name>        Override runtime.backend (go, xla:cpu, etc.)
+  --provider <name>       Override embedding.provider (scratch_relu|ko_hub_graph)
+  --roots-config <path>   Override embedding.roots_config_file
+  --pretrain-dir <path>   Override embedding.pretrain_checkpoint_dir
+  --freeze-encoder <bool> Override embedding.freeze_encoder (true|false)
+  --pca-dim <int>         Override embedding.pca_dim (0 disables PCA)
+  --checkpoint-dir <path> Override paths.checkpoint_dir
+  --steps <int>           Override training.train_steps (or pretrain steps)
+  --batch-size <int>      Override training.batch_size (or pretrain batch_size)
+  --sort-by <mode>        topic_nfc_intensity | nfc_intensity | intensity_desc | sentiment_neg_desc
+  --input <path>          Custom file (.jsonl/.csv/.tsv for analyze, or annotated CSV for eval-human)
+  --output-dir <path>     Override paths.output_dir
+  --limit <int>           Max articles to analyze (0 = all)
+  --resume                Resume training from existing checkpoint
 `)
 }

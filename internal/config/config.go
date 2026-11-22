@@ -27,6 +27,7 @@ type Config struct {
 	Datasets            DatasetsConfig            `yaml:"datasets"`
 	Tokenizer           TokenizerConfig           `yaml:"tokenizer"`
 	Model               ModelConfig               `yaml:"model"`
+	Embedding           EmbeddingConfig           `yaml:"embedding"`
 	Training            TrainingConfig            `yaml:"training"`
 	InferenceAndSorting InferenceAndSortingConfig `yaml:"inference_and_sorting"`
 	Logging             LoggingConfig             `yaml:"logging"`
@@ -74,6 +75,22 @@ type TokenizerConfig struct {
 	PadToken        string `yaml:"pad_token"`
 	UnkToken        string `yaml:"unk_token"`
 	VocabFilename   string `yaml:"vocab_filename"`
+}
+
+// ValidEmbeddingProviders lists the supported Korean text encoder providers.
+var ValidEmbeddingProviders = []string{
+	"scratch_relu",
+	"ko_hub_graph",
+}
+
+// EmbeddingConfig selects between scratch ReLU embedding and pretrained KO-Hub multilingual student encoder.
+type EmbeddingConfig struct {
+	Provider              string `yaml:"provider"`
+	RootsConfigFile       string `yaml:"roots_config_file"`
+	PretrainCheckpointDir string `yaml:"pretrain_checkpoint_dir"`
+	FreezeEncoder         bool   `yaml:"freeze_encoder"`
+	StudentOutDim         int    `yaml:"student_out_dim"`
+	PCADim                int    `yaml:"pca_dim"`
 }
 
 // ModelConfig defines the GoMLX ReLU multi-task MLP architecture.
@@ -274,6 +291,36 @@ func applyEnvOverrides(cfg *Config) error {
 		}
 		cfg.Clustering.HumanEvalSampleSize = n
 	}
+	if v := strings.TrimSpace(os.Getenv("NFC_EMBEDDING_PROVIDER")); v != "" {
+		cfg.Embedding.Provider = v
+	}
+	if v := strings.TrimSpace(os.Getenv("NFC_ROOTS_CONFIG_FILE")); v != "" {
+		cfg.Embedding.RootsConfigFile = v
+	}
+	if v := strings.TrimSpace(os.Getenv("NFC_PRETRAIN_CHECKPOINT_DIR")); v != "" {
+		cfg.Embedding.PretrainCheckpointDir = v
+	}
+	if v := strings.TrimSpace(os.Getenv("NFC_FREEZE_ENCODER")); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("invalid NFC_FREEZE_ENCODER=%q: %w", v, err)
+		}
+		cfg.Embedding.FreezeEncoder = b
+	}
+	if v := strings.TrimSpace(os.Getenv("NFC_STUDENT_OUT_DIM")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("invalid NFC_STUDENT_OUT_DIM=%q: %w", v, err)
+		}
+		cfg.Embedding.StudentOutDim = n
+	}
+	if v := strings.TrimSpace(os.Getenv("NFC_PCA_DIM")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("invalid NFC_PCA_DIM=%q: %w", v, err)
+		}
+		cfg.Embedding.PCADim = n
+	}
 	return nil
 }
 
@@ -348,6 +395,20 @@ func (c *Config) Validate() error {
 	}
 	if strings.ToLower(strings.TrimSpace(c.Model.Activation)) != "relu" {
 		return fmt.Errorf("model.activation must be \"relu\", got %q", c.Model.Activation)
+	}
+	if !slices.Contains(ValidEmbeddingProviders, c.Embedding.Provider) {
+		return fmt.Errorf("embedding.provider %q not in %v", c.Embedding.Provider, ValidEmbeddingProviders)
+	}
+	if c.Embedding.StudentOutDim < 8 {
+		return fmt.Errorf("embedding.student_out_dim must be >= 8, got %d", c.Embedding.StudentOutDim)
+	}
+	if c.Embedding.PCADim < 0 {
+		return fmt.Errorf("embedding.pca_dim must be >= 0, got %d", c.Embedding.PCADim)
+	}
+	if c.Embedding.Provider == "ko_hub_graph" {
+		if strings.TrimSpace(c.Embedding.RootsConfigFile) == "" || strings.TrimSpace(c.Embedding.PretrainCheckpointDir) == "" {
+			return fmt.Errorf("embedding.roots_config_file and pretrain_checkpoint_dir must not be empty when provider=ko_hub_graph")
+		}
 	}
 	if c.Training.BatchSize < 1 || c.Training.EvalBatchSize < 1 {
 		return fmt.Errorf("training batch_size and eval_batch_size must be >= 1")

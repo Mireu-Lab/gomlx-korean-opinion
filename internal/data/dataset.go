@@ -42,7 +42,7 @@ func PrepareExamples(records []Record, tok *tokenizer.Tokenizer, tax *nfc.Taxono
 	out := make([]EncodedExample, len(records))
 	for i, rec := range records {
 		tokens := tok.Encode(rec.Text)
-		targets, scores, matched := tax.WeakAnnotate(rec.Text)
+		targets, scores, matched, guardTriggered := tax.WeakAnnotateDetailed(rec.Text)
 		var nfcMask float32
 		if matched > 0 {
 			nfcMask = 1.0
@@ -53,6 +53,10 @@ func PrepareExamples(records []Record, tok *tokenizer.Tokenizer, tax *nfc.Taxono
 					stats.PerFeelingHits[c]++
 				}
 			}
+		} else if guardTriggered {
+			// Homonym guard hits provide high-value negative calibration for subword/bigram collisions (e.g., 화가/문화가).
+			nfcMask = 1.0
+			stats.NFCSupervised++
 		} else if negCalibProb > 0 && rng != nil {
 			// Calibrate negative NFC examples primarily from positive reviews or a small fraction of neutral headlines.
 			if rec.HasSentiment && rec.SentimentLabel >= 0.5 {

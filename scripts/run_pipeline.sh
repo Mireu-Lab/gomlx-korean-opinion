@@ -27,6 +27,15 @@ CMD_ARGS=(--config "${CONFIG_PATH}")
 if [[ -n "${GOMLX_BACKEND:-}" ]]; then
   CMD_ARGS+=(--backend "${GOMLX_BACKEND}")
 fi
+if [[ -n "${EMBEDDING_PROVIDER:-}" ]]; then
+  CMD_ARGS+=(--provider "${EMBEDDING_PROVIDER}")
+fi
+if [[ -n "${PCA_DIM:-}" ]]; then
+  CMD_ARGS+=(--pca-dim "${PCA_DIM}")
+fi
+if [[ -n "${CHECKPOINT_DIR:-}" ]]; then
+  CMD_ARGS+=(--checkpoint-dir "${CHECKPOINT_DIR}")
+fi
 if [[ -n "${SORT_MODE:-}" ]]; then
   CMD_ARGS+=(--sort-by "${SORT_MODE}")
 fi

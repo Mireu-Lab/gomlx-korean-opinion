@@ -18,11 +18,17 @@ func TestLoadAndOverrides(t *testing.T) {
 	if cfg.Runtime.Backend != "go" {
 		t.Fatalf("expected default backend go, got %q", cfg.Runtime.Backend)
 	}
+	if cfg.Embedding.Provider != "scratch_relu" {
+		t.Fatalf("expected default embedding.provider scratch_relu, got %q", cfg.Embedding.Provider)
+	}
 
 	t.Setenv("NFC_BACKEND", "xla:cpu")
 	t.Setenv("NFC_TRAIN_STEPS", "42")
 	t.Setenv("NFC_SORT_MODE", "intensity_desc")
 	t.Setenv("NFC_CLUSTER_MIN_SIZE", "12")
+	t.Setenv("NFC_EMBEDDING_PROVIDER", "ko_hub_graph")
+	t.Setenv("NFC_FREEZE_ENCODER", "true")
+	t.Setenv("NFC_PCA_DIM", "16")
 	overridden, err := Load(cfgPath)
 	if err != nil {
 		t.Fatalf("Load with env overrides failed: %v", err)
@@ -38,6 +44,13 @@ func TestLoadAndOverrides(t *testing.T) {
 	}
 	if overridden.Clustering.MinClusterSize != 12 {
 		t.Fatalf("expected NFC_CLUSTER_MIN_SIZE override 12, got %d", overridden.Clustering.MinClusterSize)
+	}
+	if overridden.Embedding.Provider != "ko_hub_graph" || !overridden.Embedding.FreezeEncoder || overridden.Embedding.PCADim != 16 {
+		t.Fatalf("unexpected embedding overrides: %+v", overridden.Embedding)
+	}
+	overridden.Embedding.Provider = "invalid_provider"
+	if err := overridden.Validate(); err == nil {
+		t.Fatalf("expected validation error for invalid embedding.provider")
 	}
 }
 
