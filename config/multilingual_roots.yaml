@@ -1,0 +1,362 @@
+cache_dir: "data/multilingual_roots"
+graph_file: "data/multilingual_roots/ko_hub_graph.bin"
+http_timeout_sec: 120
+http_retries: 3
+
+sources:
+  unihan_zip_url: "https://www.unicode.org/Public/UCD/latest/ucd/Unihan.zip"
+  unihan_zip_file: "Unihan.zip"
+  omw_kor_wikt_url: "https://raw.githubusercontent.com/omwn/omw-data/main/wns/wikt/wn-wikt-kor.tab"
+  omw_kor_wikt_file: "wn-wikt-kor.tab"
+  omw_kor_cldr_url: "https://raw.githubusercontent.com/omwn/omw-data/main/wns/cldr/wn-cldr-kor.tab"
+  omw_kor_cldr_file: "wn-cldr-kor.tab"
+  omw_eng_url: "https://raw.githubusercontent.com/omwn/omw-data/main/wns/eng/wn-data-eng.tab"
+  omw_eng_file: "wn-data-eng.tab"
+  omw_jpn_url: "https://raw.githubusercontent.com/omwn/omw-data/main/wns/jpn/wn-data-jpn.tab"
+  omw_jpn_file: "wn-data-jpn.tab"
+  omw_cmn_url: "https://raw.githubusercontent.com/omwn/omw-data/main/wns/cow/wn-data-cmn.tab"
+  omw_cmn_file: "wn-data-cmn.tab"
+
+limits:
+  min_ko_freq: 3
+  max_ko_surface_nodes: 20000
+  max_hanja_per_syllable: 4
+  max_neighbors_per_node: 8
+  max_candidate_senses: 4
+  min_edge_confidence: 0.20
+  cooccur_window: 4
+  min_cooccur_count: 3
+  max_corpus_docs: 80000
+
+edge_weights:
+  has_candidate_sense: 1.00
+  composed_of_hanja: 0.85
+  aligned_en: 1.00
+  aligned_ja: 0.80
+  aligned_zh: 0.75
+  cooccurs_ko: 0.60
+  nfc_anchor: 1.10
+
+pretrain:
+  checkpoint_dir: "checkpoints/ko_hub_pretrain"
+  embed_dim: 96
+  out_dim: 128
+  root_embed_dim: 128
+  attn_dim: 64
+  max_roots_per_view: 4
+  batch_size: 64
+  pretrain_steps: 1000
+  log_every_steps: 100
+  checkpoint_keep: 2
+  optimizer: "adamw"
+  learning_rate: 0.003
+  min_learning_rate: 0.0002
+  weight_decay: 0.0001
+  dropout_rate: 0.15
+  temperature: 0.15
+  disambig_margin: 0.35
+  mask_epsilon: 0.000001
+  loss_weights:
+    ko_en: 1.00
+    ko_hanja: 0.85
+    ko_jazh: 0.75
+    disambig: 1.20
+    distill: 1.00
+
+polysemy_seeds:
+  - surface: "화가"
+    senses:
+      - sense_key: "hwaga_painter"
+        gloss: "painter/artist"
+        hanja: ["畫", "家"]
+        en: ["painter", "artist"]
+        ja: ["画家"]
+        zh: ["画家"]
+        context_cues: ["전시회", "자선전시회", "미술", "미술관", "단색화", "단색화가", "여류화가", "화가협회", "부조적", "작품", "협회", "그림", "갤러리", "화백", "초대전", "서양화", "개인전"]
+      - sense_key: "hwaga_anger"
+        gloss: "anger/rage"
+        hanja: ["火", "憤", "怒"]
+        en: ["anger", "rage", "fury"]
+        ja: ["怒り", "憤怒"]
+        zh: ["生气", "愤怒"]
+        context_cues: ["분노", "짜증", "항의", "규탄", "열받", "치밀", "억울", "최악", "화나"]
+        nfc_anchor: "anger"
+
+  - surface: "사기"
+    senses:
+      - sense_key: "sagi_fraud"
+        gloss: "fraud/scam"
+        hanja: ["詐", "欺"]
+        en: ["fraud", "scam", "deception"]
+        ja: ["詐欺"]
+        zh: ["诈骗", "欺诈"]
+        context_cues: ["피해", "고소", "구속", "혐의", "경찰", "검찰", "기만", "보이스피싱", "대출"]
+        nfc_anchor: "unfairness"
+      - sense_key: "sagi_morale"
+        gloss: "morale/spirit"
+        hanja: ["士", "氣"]
+        en: ["morale", "spirit"]
+        ja: ["士気"]
+        zh: ["士气"]
+        context_cues: ["경기", "감독", "선수", "승리", "팀", "응원", "진작", "충전", "우승"]
+        nfc_anchor: "competitiveness"
+
+  - surface: "배"
+    senses:
+      - sense_key: "bae_ship"
+        gloss: "ship/vessel"
+        hanja: ["船"]
+        en: ["ship", "vessel", "boat"]
+        ja: ["船"]
+        zh: ["船"]
+        context_cues: ["바다", "항구", "선박", "출항", "어선", "여객선", "해양", "침몰"]
+      - sense_key: "bae_pear"
+        gloss: "pear/fruit"
+        hanja: ["梨"]
+        en: ["pear"]
+        ja: ["梨"]
+        zh: ["梨"]
+        context_cues: ["과일", "과수원", "수확", "사과", "당도", "추석", "선물"]
+
+  - surface: "눈"
+    senses:
+      - sense_key: "nun_eye"
+        gloss: "eye/sight"
+        hanja: ["目", "眼"]
+        en: ["eye", "vision"]
+        ja: ["目"]
+        zh: ["眼睛"]
+        context_cues: ["시력", "안과", "시선", "눈물", "응시", "감동", "연기"]
+      - sense_key: "nun_snow"
+        gloss: "snow/winter"
+        hanja: ["雪"]
+        en: ["snow", "blizzard"]
+        ja: ["雪"]
+        zh: ["雪"]
+        context_cues: ["겨울", "폭설", "한파", "빙판", "스키", "날씨", "기상청"]
+
+  - surface: "차"
+    senses:
+      - sense_key: "cha_vehicle"
+        gloss: "vehicle/car"
+        hanja: ["車"]
+        en: ["car", "vehicle", "automobile"]
+        ja: ["車", "自動車"]
+        zh: ["车", "汽车"]
+        context_cues: ["도로", "운전", "교통", "전기차", "현대차", "주행", "사고"]
+      - sense_key: "cha_tea"
+        gloss: "tea/beverage"
+        hanja: ["茶"]
+        en: ["tea"]
+        ja: ["茶"]
+        zh: ["茶"]
+        context_cues: ["녹차", "홍차", "카페", "음료", "전통차", "향기"]
+
+  - surface: "외로움"
+    senses:
+      - sense_key: "oeroum_loneliness"
+        gloss: "loneliness/solitude"
+        hanja: ["孤", "獨"]
+        en: ["loneliness", "solitude", "isolation"]
+        ja: ["孤独", "寂しさ"]
+        zh: ["孤独", "寂寞"]
+        context_cues: ["고독", "혼자", "독거", "1인가구", "고립", "쓸쓸", "은둔", "무연고"]
+        nfc_anchor: "loneliness"
+
+  - surface: "소외"
+    senses:
+      - sense_key: "soe_alienation"
+        gloss: "alienation/marginalization"
+        hanja: ["疏", "外"]
+        en: ["alienation", "exclusion", "marginalization"]
+        ja: ["疎外"]
+        zh: ["疏远", "边缘化"]
+        context_cues: ["배제", "사각지대", "취약계층", "격차", "불평등", "낙후", "비수도권", "농어촌"]
+        nfc_anchor: "alienation"
+
+  - surface: "고금리"
+    senses:
+      - sense_key: "gogeumri_high_rate"
+        gloss: "high interest rate"
+        hanja: ["高", "金", "利"]
+        en: ["interest_rate", "inflation", "debt"]
+        ja: ["高金利"]
+        zh: ["高利率"]
+        context_cues: ["물가", "대출", "가계부채", "기준금리", "서민", "부담", "한국은행"]
+        nfc_anchor: "burden"
+
+  - surface: "기후위기"
+    senses:
+      - sense_key: "gihuwigi_climate"
+        gloss: "climate crisis"
+        hanja: ["氣", "候", "危", "機"]
+        en: ["climate_change", "crisis", "disaster"]
+        ja: ["気候危機"]
+        zh: ["气候危机"]
+        context_cues: ["탄소", "폭염", "이상기후", "환경", "재난", "온실가스"]
+        nfc_anchor: "anxiety"
+
+  - surface: "공분"
+    senses:
+      - sense_key: "gongbun_outrage"
+        gloss: "public outrage"
+        hanja: ["公", "憤"]
+        en: ["outrage", "indignation", "anger"]
+        ja: ["公憤"]
+        zh: ["公愤"]
+        context_cues: ["시민", "분노", "규탄", "비판", "논란", "국민"]
+        nfc_anchor: "anger"
+
+  - surface: "역차별"
+    senses:
+      - sense_key: "yeokchabyeol_reverse_disc"
+        gloss: "reverse discrimination"
+        hanja: ["逆", "差", "別"]
+        en: ["discrimination", "unfairness"]
+        ja: ["逆差別"]
+        zh: ["逆向歧视"]
+        context_cues: ["공정", "형평성", "불공정", "논란", "청년", "특혜"]
+        nfc_anchor: "unfairness"
+
+  - surface: "참사"
+    senses:
+      - sense_key: "chamsa_tragedy"
+        gloss: "tragedy/disaster"
+        hanja: ["慘", "事"]
+        en: ["tragedy", "disaster", "casualty"]
+        ja: ["惨事"]
+        zh: ["惨案", "灾难"]
+        context_cues: ["사망", "희생", "애도", "유가족", "슬픔", "사고", "재난"]
+        nfc_anchor: "sadness"
+
+  - surface: "폭락"
+    senses:
+      - sense_key: "pongnak_crash"
+        gloss: "plunge/market crash"
+        hanja: ["暴", "落"]
+        en: ["crash", "plunge", "slump"]
+        ja: ["暴落"]
+        zh: ["暴跌"]
+        context_cues: ["주가", "코스피", "환율", "급락", "불안", "공포", "시장"]
+        nfc_anchor: "anxiety"
+
+  - surface: "공포"
+    senses:
+      - sense_key: "gongpo_terror"
+        gloss: "terror/panic"
+        hanja: ["恐", "怖"]
+        en: ["terror", "panic", "horror"]
+        ja: ["恐怖"]
+        zh: ["恐怖"]
+        context_cues: ["충격", "패닉", "화재", "붕괴", "범행", "공황"]
+        nfc_anchor: "terror"
+
+  - surface: "혐오"
+    senses:
+      - sense_key: "hyeomo_hatred"
+        gloss: "hatred/hostility"
+        hanja: ["嫌", "惡"]
+        en: ["hatred", "hostility", "loathing"]
+        ja: ["嫌悪"]
+        zh: ["厌恶", "仇恨"]
+        context_cues: ["갈등", "비난", "증오", "차별", "적대", "공격"]
+        nfc_anchor: "hostility"
+
+  - surface: "무기력"
+    senses:
+      - sense_key: "mugiryeok_helplessness"
+        gloss: "helplessness/lethargy"
+        hanja: ["無", "氣", "力"]
+        en: ["helplessness", "lethargy", "apathy"]
+        ja: ["無気力"]
+        zh: ["无力感"]
+        context_cues: ["좌절", "포기", "침체", "노잼", "지루", "답답"]
+        nfc_anchor: "helplessness"
+
+  - surface: "허무"
+    senses:
+      - sense_key: "heomu_emptiness"
+        gloss: "emptiness/futility"
+        hanja: ["虛", "無"]
+        en: ["emptiness", "futility", "disappointment"]
+        ja: ["虚無"]
+        zh: ["虚无", "空虚"]
+        context_cues: ["실망", "허탈", "공허", "시간낭비", "아쉽", "무의미"]
+        nfc_anchor: "emptiness"
+
+  - surface: "억울함"
+    senses:
+      - sense_key: "eogulham_unfairness"
+        gloss: "resentment/injustice"
+        hanja: ["抑", "鬱"]
+        en: ["injustice", "unfairness", "grievance"]
+        ja: ["悔しさ"]
+        zh: ["委屈", "冤枉"]
+        context_cues: ["누명", "피해자", "항소", "부당", "불공정", "호소"]
+        nfc_anchor: "unfairness"
+
+  - surface: "질투"
+    senses:
+      - sense_key: "jiltu_jealousy"
+        gloss: "jealousy/envy"
+        hanja: ["嫉", "妬"]
+        en: ["jealousy", "envy", "deprivation"]
+        ja: ["嫉妬"]
+        zh: ["嫉妒"]
+        context_cues: ["시기", "박탈감", "부럽", "특혜", "양극화"]
+        nfc_anchor: "jealousy"
+
+  - surface: "그리움"
+    senses:
+      - sense_key: "geurium_longing"
+        gloss: "longing/nostalgia"
+        hanja: ["懷", "念"]
+        en: ["longing", "nostalgia", "memory"]
+        ja: ["懐かしさ"]
+        zh: ["思念", "怀念"]
+        context_cues: ["추억", "향수", "추모", "감동", "여운", "고향"]
+        nfc_anchor: "longing"
+
+  - surface: "두려움"
+    senses:
+      - sense_key: "duryeoum_fear"
+        gloss: "fear/threat"
+        hanja: ["恐", "懼"]
+        en: ["fear", "threat", "danger"]
+        ja: ["恐れ"]
+        zh: ["恐惧", "害怕"]
+        context_cues: ["위협", "위험", "전쟁", "범죄", "재난", "무서"]
+        nfc_anchor: "fear"
+
+  - surface: "부담감"
+    senses:
+      - sense_key: "budamgam_burden"
+        gloss: "burden/pressure"
+        hanja: ["負", "擔"]
+        en: ["burden", "pressure", "debt"]
+        ja: ["負担"]
+        zh: ["负担"]
+        context_cues: ["물가", "세금", "빚", "과로", "생계", "압박"]
+        nfc_anchor: "burden"
+
+  - surface: "경쟁심"
+    senses:
+      - sense_key: "gyeongjaengsim_competition"
+        gloss: "competitiveness/rivalry"
+        hanja: ["競", "爭"]
+        en: ["competition", "rivalry", "victory"]
+        ja: ["競争"]
+        zh: ["竞争"]
+        context_cues: ["승부", "결승", "우승", "대결", "라이벌", "1위"]
+        nfc_anchor: "competitiveness"
+
+  - surface: "열등감"
+    senses:
+      - sense_key: "yeoldeunggam_inferiority"
+        gloss: "inferiority/shame"
+        hanja: ["劣", "等"]
+        en: ["inferiority", "humiliation", "defeat"]
+        ja: ["劣等感"]
+        zh: ["自卑", "劣等感"]
+        context_cues: ["열세", "참패", "위축", "창피", "꼴찌", "초라"]
+        nfc_anchor: "inferiority"
