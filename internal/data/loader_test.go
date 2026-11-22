@@ -44,7 +44,7 @@ func TestLoadNSMCAndCustomArticlesAndBatching(t *testing.T) {
 		t.Fatalf("LoadTaxonomy: %v", err)
 	}
 	tokCfg := config.TokenizerConfig{
-		VocabSize: 100, MaxSeqLen: 12, MinFreq: 1, UseCharBigrams: true, PadToken: "<PAD>", UnkToken: "<UNK>",
+		VocabSize: 100, MaxSeqLen: 12, WordSeqLen: 8, MinFreq: 1, UseCharBigrams: true, PadToken: "<PAD>", UnkToken: "<UNK>",
 	}
 	tok := tokenizer.Fit([]string{nsmcRecs[0].Text, nsmcRecs[1].Text, customRecs[0].Text}, tokCfg)
 	rng := rand.New(rand.NewSource(42))
@@ -60,7 +60,7 @@ func TestLoadNSMCAndCustomArticlesAndBatching(t *testing.T) {
 		YNATBatchRatio:         0.5,
 		NSMCBatchRatio:         0.5,
 		NFCPositiveSampleRatio: 0.5,
-	}, tokCfg.MaxSeqLen, tax.NumFeelings(), 42)
+	}, tokCfg.MaxSeqLen, tokCfg.WordSeqLen, tax.NumFeelings(), 42)
 	if err != nil {
 		t.Fatalf("NewMultiTaskTrainDataset: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestLoadNSMCAndCustomArticlesAndBatching(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Iter error: %v", err)
 		}
-		if len(batch.Inputs) != 1 || len(batch.Labels) != 6 {
+		if len(batch.Inputs) != 2 || len(batch.Labels) != 6 {
 			t.Fatalf("unexpected batch tensor counts: inputs=%d labels=%d", len(batch.Inputs), len(batch.Labels))
 		}
 		if err := batch.Finalize(); err != nil {

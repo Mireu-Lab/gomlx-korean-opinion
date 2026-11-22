@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gomlx/compute"
 	gomlxmodel "github.com/gomlx/gomlx/ml/model"
@@ -20,6 +21,7 @@ import (
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/logging"
 	nfcmodel "github.com/Mireu-Lab/gomlx-korean-opinion/internal/model"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/nfc"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/onnxembed"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/pretrain"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/sorter"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/tokenizer"
@@ -144,6 +146,16 @@ func runCommand(
 		return err
 	case "pretrain":
 		return stagePretrain(cfg, tax, stepsOverride, batchOverride, log)
+	case "export-dataset":
+		return stageExportDataset(cfg, tax, log)
+	case "eval-human":
+		return stageEvalHuman(cfg, inputPath, log)
+	}
+	if cfg.Embedding.Provider == "onnx_backbone_relu" {
+		return runONNXCommand(subcmd, cfg, tax, inputPath, limit, resume, log)
+	}
+
+	switch subcmd {
 	case "train":
 		backend, _, _, _, err := stageTrain(cfg, tax, resume, log)
 		if backend != nil {
@@ -156,13 +168,11 @@ func runCommand(
 		return stageAnalyze(cfg, tax, inputPath, limit, nil, nil, nil, log)
 	case "cluster":
 		return stageCluster(cfg, tax, nil, nil, nil, log)
-	case "eval-human":
-		return stageEvalHuman(cfg, inputPath, log)
 	case "pipeline":
 		if err := stageDownload(cfg, log); err != nil {
 			return err
 		}
-		if cfg.Embedding.Provider == "ko_hub_graph" {
+		if nfcmodel.IsKoHubProvider(cfg.Embedding.Provider) {
 			metaPath := filepath.Join(cfg.Embedding.PretrainCheckpointDir, "pretrain_meta.json")
 			if _, statErr := os.Stat(metaPath); statErr != nil {
 				if err := stagePretrain(cfg, tax, 0, 0, log); err != nil {
@@ -363,7 +373,7 @@ func stageTrain(
 			tok = loadedTok
 			log.Info("tokenizer", "loaded existing vocab (%d tokens) from %s", tok.VocabLen(), cfg.VocabPath())
 		}
-	} else if cfg.Embedding.Provider == "ko_hub_graph" {
+	} else if nfcmodel.IsKoHubProvider(cfg.Embedding.Provider) {
 		pretrainTokPath := filepath.Join(cfg.Embedding.PretrainCheckpointDir, cfg.Tokenizer.VocabFilename)
 		loadedTok, err := tokenizer.Load(pretrainTokPath)
 		if err != nil {
@@ -455,7 +465,7 @@ func stageEval(cfg *config.Config, tax *nfc.Taxonomy, log *logging.DualLogger) e
 	defer backend.Finalize()
 
 	graphCfg := nfcmodel.BuildGraphConfig(cfg, tok.VocabLen(), tax.NumTopics(), tax.NumFeelings())
-	pred, store, err := nfcmodel.LoadPredictor(backend, cfg.Paths.CheckpointDir, graphCfg, cfg.Training.EvalBatchSize, cfg.Tokenizer.MaxSeqLen)
+	pred, store, err := nfcmodel.LoadPredictor(backend, cfg.Paths.CheckpointDir, graphCfg, cfg.Training.EvalBatchSize, cfg.Tokenizer.MaxSeqLen, cfg.Tokenizer.WordSeqLen)
 	if err != nil {
 		return err
 	}
@@ -540,9 +550,9 @@ func stageAnalyze(
 		graphCfg := nfcmodel.BuildGraphConfig(cfg, tok.VocabLen(), tax.NumTopics(), tax.NumFeelings())
 		var pred *nfcmodel.Predictor
 		if existingStore != nil {
-			pred, err = nfcmodel.NewPredictor(backend, existingStore, graphCfg, cfg.Training.EvalBatchSize, cfg.Tokenizer.MaxSeqLen)
+			pred, err = nfcmodel.NewPredictor(backend, existingStore, graphCfg, cfg.Training.EvalBatchSize, cfg.Tokenizer.MaxSeqLen, cfg.Tokenizer.WordSeqLen)
 		} else {
-			pred, _, err = nfcmodel.LoadPredictor(backend, cfg.Paths.CheckpointDir, graphCfg, cfg.Training.EvalBatchSize, cfg.Tokenizer.MaxSeqLen)
+			pred, _, err = nfcmodel.LoadPredictor(backend, cfg.Paths.CheckpointDir, graphCfg, cfg.Training.EvalBatchSize, cfg.Tokenizer.MaxSeqLen, cfg.Tokenizer.WordSeqLen)
 		}
 		if err != nil {
 			return err
@@ -659,9 +669,9 @@ func stageCluster(
 	graphCfg := nfcmodel.BuildGraphConfig(cfg, tok.VocabLen(), tax.NumTopics(), tax.NumFeelings())
 	var pred *nfcmodel.Predictor
 	if existingStore != nil {
-		pred, err = nfcmodel.NewPredictor(backend, existingStore, graphCfg, cfg.Training.EvalBatchSize, cfg.Tokenizer.MaxSeqLen)
+		pred, err = nfcmodel.NewPredictor(backend, existingStore, graphCfg, cfg.Training.EvalBatchSize, cfg.Tokenizer.MaxSeqLen, cfg.Tokenizer.WordSeqLen)
 	} else {
-		pred, _, err = nfcmodel.LoadPredictor(backend, cfg.Paths.CheckpointDir, graphCfg, cfg.Training.EvalBatchSize, cfg.Tokenizer.MaxSeqLen)
+		pred, _, err = nfcmodel.LoadPredictor(backend, cfg.Paths.CheckpointDir, graphCfg, cfg.Training.EvalBatchSize, cfg.Tokenizer.MaxSeqLen, cfg.Tokenizer.WordSeqLen)
 	}
 	if err != nil {
 		return err
@@ -729,6 +739,151 @@ func stageEvalHuman(cfg *config.Config, inputPath string, log *logging.DualLogge
 	return nil
 }
 
+func stageExportDataset(cfg *config.Config, tax *nfc.Taxonomy, log *logging.DualLogger) error {
+	outDir := cfg.Paths.OutputDir
+	log.Status("EXPORT_DATASET", "START", "preparing and exporting preprocessed Parquet dataset to %s", outDir)
+	if err := stageDownload(cfg, log); err != nil {
+		return err
+	}
+
+	ynatTrainRecs, err := data.LoadYNAT(cfg.YNATTrainPath())
+	if err != nil {
+		return err
+	}
+	ynatValRecs, err := data.LoadYNAT(cfg.YNATValPath())
+	if err != nil {
+		return err
+	}
+	nsmcTrainRecs, skippedTrain, err := data.LoadNSMC(cfg.NSMCTrainPath())
+	if err != nil {
+		return err
+	}
+	nsmcTestRecs, skippedTest, err := data.LoadNSMC(cfg.NSMCTestPath())
+	if err != nil {
+		return err
+	}
+	log.Info("export_dataset", "loaded splits ynat_train=%d ynat_val=%d nsmc_train=%d (skipped %d) nsmc_test=%d (skipped %d)",
+		len(ynatTrainRecs), len(ynatValRecs), len(nsmcTrainRecs), skippedTrain, len(nsmcTestRecs), skippedTest)
+
+	pretrainTokPath := filepath.Join(cfg.Embedding.PretrainCheckpointDir, cfg.Tokenizer.VocabFilename)
+	var tok *tokenizer.Tokenizer
+	if loaded, err := tokenizer.Load(pretrainTokPath); err == nil {
+		tok = loaded
+		log.Info("export_dataset", "loaded KO-Hub particle-split vocab (%d tokens) from %s", tok.VocabLen(), pretrainTokPath)
+	} else {
+		corpus := make([]string, 0, len(ynatTrainRecs)+len(nsmcTrainRecs))
+		for _, r := range ynatTrainRecs {
+			corpus = append(corpus, r.Text)
+		}
+		for _, r := range nsmcTrainRecs {
+			corpus = append(corpus, r.Text)
+		}
+		tok = tokenizer.Fit(corpus, cfg.Tokenizer)
+		log.Info("export_dataset", "fitted fallback vocab (%d tokens) from training corpus", tok.VocabLen())
+	}
+
+	trainRng := rand.New(rand.NewSource(cfg.Runtime.Seed))
+	evalRng := rand.New(rand.NewSource(cfg.Runtime.Seed + 1))
+
+	type splitSpec struct {
+		name         string
+		records      []data.Record
+		negCalibProb float64
+		rng          *rand.Rand
+	}
+	specs := []splitSpec{
+		{name: "ynat_train", records: ynatTrainRecs, negCalibProb: cfg.Training.NFCNegativeCalibrationProb, rng: trainRng},
+		{name: "ynat_validation", records: ynatValRecs, negCalibProb: 0, rng: evalRng},
+		{name: "nsmc_train", records: nsmcTrainRecs, negCalibProb: cfg.Training.NFCNegativeCalibrationProb, rng: trainRng},
+		{name: "nsmc_test", records: nsmcTestRecs, negCalibProb: 0, rng: evalRng},
+	}
+
+	splitStats := make(map[string]data.ExportSplitStats, len(specs))
+	for _, sp := range specs {
+		examples, prepStats := data.PrepareExamples(sp.records, tok, tax, sp.negCalibProb, sp.rng)
+		parquetPath := filepath.Join(outDir, "data", fmt.Sprintf("%s-00000-of-00001.parquet", sp.name))
+		st, err := data.ExportPreprocessedSplit(parquetPath, sp.name, examples, tok, tax)
+		if err != nil {
+			return err
+		}
+		splitStats[sp.name] = st
+		log.Info("export_dataset", "wrote %s rows=%d nfc_active=%d guard_hits=%d supervised=%d prep_guard=%d",
+			parquetPath, st.Rows, st.NFCActive, st.HomonymGuardHits, st.NFCSupervised, prepStats.GuardHits)
+	}
+
+	vocabOutDir := filepath.Join(outDir, "vocab")
+	if err := os.MkdirAll(vocabOutDir, 0755); err != nil {
+		return fmt.Errorf("create vocab staging dir: %w", err)
+	}
+	if err := tok.Save(filepath.Join(vocabOutDir, cfg.Tokenizer.VocabFilename)); err != nil {
+		return err
+	}
+
+	configOutDir := filepath.Join(outDir, "config")
+	if err := os.MkdirAll(configOutDir, 0755); err != nil {
+		return fmt.Errorf("create config staging dir: %w", err)
+	}
+	for _, src := range []string{
+		cfg.Paths.TopicsFile,
+		cfg.Paths.NFCTaxonomyFile,
+		cfg.Paths.EntityRulesFile,
+		cfg.Embedding.RootsConfigFile,
+	} {
+		if strings.TrimSpace(src) == "" {
+			continue
+		}
+		if err := copyBinaryFile(src, filepath.Join(configOutDir, filepath.Base(src))); err != nil {
+			return err
+		}
+	}
+
+	var graphOutRel string
+	var graphSize int64
+	if strings.TrimSpace(cfg.Embedding.RootsConfigFile) != "" {
+		if rootsCfg, err := graphkg.LoadRootsConfig(cfg.Embedding.RootsConfigFile); err == nil && rootsCfg.GraphFile != "" {
+			if st, statErr := os.Stat(rootsCfg.GraphFile); statErr == nil && !st.IsDir() {
+				dest := filepath.Join(outDir, "graph", filepath.Base(rootsCfg.GraphFile))
+				if err := copyBinaryFile(rootsCfg.GraphFile, dest); err != nil {
+					return err
+				}
+				graphOutRel = filepath.ToSlash(filepath.Join("graph", filepath.Base(rootsCfg.GraphFile)))
+				graphSize = st.Size()
+			}
+		}
+	}
+
+	summary := data.ExportDatasetSummary{
+		CreatedAtUTC:   time.Now().UTC().Format(time.RFC3339),
+		VocabSize:      tok.VocabLen(),
+		MaxSeqLen:      cfg.Tokenizer.MaxSeqLen,
+		WordSeqLen:     cfg.Tokenizer.WordSeqLen,
+		SplitParticles: cfg.Tokenizer.SplitParticles,
+		ParticleCount:  len(cfg.Tokenizer.KoreanParticles),
+		GraphFile:      graphOutRel,
+		GraphSizeBytes: graphSize,
+		Splits:         splitStats,
+	}
+	if err := data.WriteDatasetSummary(filepath.Join(outDir, "dataset_stats.json"), summary); err != nil {
+		return err
+	}
+	log.Status("EXPORT_DATASET", "SUCCESS", "exported 4 Parquet splits, vocab, configs, and stats to %s", outDir)
+	return nil
+}
+
+func copyBinaryFile(src, dst string) error {
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("read %q: %w", src, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return fmt.Errorf("create dir for %q: %w", dst, err)
+	}
+	if err := os.WriteFile(dst, raw, 0644); err != nil {
+		return fmt.Errorf("write %q: %w", dst, err)
+	}
+	return nil
+}
+
 func sampleIndices(total, limit int, rng *rand.Rand) []int {
 	if limit <= 0 || limit >= total {
 		out := make([]int, total)
@@ -758,9 +913,10 @@ func printUsage() {
 
 Commands:
   download     Download NSMC and KLUE-YNAT datasets configured in config.yaml
-  build-graph  Download Unihan/OMW sources and build KO-Hub multilingual roots CSR graph
-  pretrain     Run GoMLX Context-Aware Soft Edge contrastive pretraining for KO-Hub Student
-  train        Fit Korean tokenizer and train GoMLX ReLU multi-task model
+  build-graph     Download Unihan/OMW sources and build KO-Hub multilingual roots CSR graph
+  pretrain        Run GoMLX Context-Aware Soft Edge contrastive pretraining for KO-Hub Student
+  export-dataset  Export preprocessed Parquet dataset splits, vocab, and KO-Hub graph metadata
+  train           Fit Korean tokenizer and train GoMLX ReLU multi-task model
   eval         Evaluate saved checkpoint on KLUE-YNAT val, NSMC test, and NFC
   analyze      Classify and sort news articles by topic, Nuclear Feeling, and intensity
   cluster      Run 3-method clustering (HDBSCAN, Entity Anchors, Hierarchical Topics) & 3-stage validation
@@ -770,7 +926,7 @@ Commands:
 Flags:
   --config <path>         Path to config YAML (default: config/config.yaml)
   --backend <name>        Override runtime.backend (go, xla:cpu, etc.)
-  --provider <name>       Override embedding.provider (scratch_relu|ko_hub_graph)
+  --provider <name>       scratch_relu | ko_hub_graph | ko_hub_cnn_relu | ko_hub_transformer_relu | ko_hub_lstm_relu | onnx_backbone_relu
   --roots-config <path>   Override embedding.roots_config_file
   --pretrain-dir <path>   Override embedding.pretrain_checkpoint_dir
   --freeze-encoder <bool> Override embedding.freeze_encoder (true|false)
@@ -784,4 +940,309 @@ Flags:
   --limit <int>           Max articles to analyze (0 = all)
   --resume                Resume training from existing checkpoint
 `)
+}
+
+func runONNXCommand(
+	subcmd string,
+	cfg *config.Config,
+	tax *nfc.Taxonomy,
+	inputPath string,
+	limit int,
+	resume bool,
+	log *logging.DualLogger,
+) error {
+	switch subcmd {
+	case "pipeline", "train", "eval", "analyze", "cluster":
+	default:
+		printUsage()
+		return fmt.Errorf("unknown subcommand %q", subcmd)
+	}
+	if err := stageDownload(cfg, log); err != nil {
+		return err
+	}
+
+	ob := cfg.ONNXBackbone
+	backend, err := compute.NewWithConfig(cfg.Runtime.Backend)
+	if err != nil {
+		return fmt.Errorf("init GoMLX backend %q: %w", cfg.Runtime.Backend, err)
+	}
+	defer backend.Finalize()
+
+	needEncoder := false
+	checkCache := func(path string, count int) bool {
+		if embeds, err := onnxembed.LoadEmbedCache(path); err == nil && len(embeds) == count {
+			return false
+		}
+		return true
+	}
+
+	subSampleRecords := func(recs []data.Record, capN int, seedOffset int64) []data.Record {
+		if capN <= 0 || capN >= len(recs) {
+			return recs
+		}
+		idxs := sampleIndices(len(recs), capN, rand.New(rand.NewSource(cfg.Runtime.Seed+seedOffset)))
+		out := make([]data.Record, len(idxs))
+		for i, idx := range idxs {
+			out[i] = recs[idx]
+		}
+		return out
+	}
+	extractTexts := func(recs []data.Record) []string {
+		out := make([]string, len(recs))
+		for i, r := range recs {
+			out[i] = r.Text
+		}
+		return out
+	}
+
+	var ynatTrainRecs, nsmcTrainRecs, ynatValRecs, nsmcTestRecs []data.Record
+	if subcmd == "pipeline" || subcmd == "train" {
+		ynatTrainRecs, err = data.LoadYNAT(cfg.YNATTrainPath())
+		if err != nil {
+			return err
+		}
+		nsmcTrainRecs, _, err = data.LoadNSMC(cfg.NSMCTrainPath())
+		if err != nil {
+			return err
+		}
+		ynatTrainRecs = subSampleRecords(ynatTrainRecs, ob.MaxTrainPerDomain, 101)
+		nsmcTrainRecs = subSampleRecords(nsmcTrainRecs, ob.MaxTrainPerDomain, 102)
+		if checkCache(filepath.Join(ob.EmbedCacheDir, fmt.Sprintf("ynat_train_%d.bin", len(ynatTrainRecs))), len(ynatTrainRecs)) ||
+			checkCache(filepath.Join(ob.EmbedCacheDir, fmt.Sprintf("nsmc_train_%d.bin", len(nsmcTrainRecs))), len(nsmcTrainRecs)) {
+			needEncoder = true
+		}
+	}
+
+	if subcmd == "pipeline" || subcmd == "eval" || subcmd == "cluster" || (subcmd == "analyze" && inputPath == "") {
+		ynatValRecs, err = data.LoadYNAT(cfg.YNATValPath())
+		if err != nil {
+			return err
+		}
+		ynatValRecs = subSampleRecords(ynatValRecs, ob.MaxEvalPerDomain, 103)
+		if checkCache(filepath.Join(ob.EmbedCacheDir, fmt.Sprintf("ynat_val_%d.bin", len(ynatValRecs))), len(ynatValRecs)) {
+			needEncoder = true
+		}
+	}
+	if subcmd == "pipeline" || subcmd == "eval" || subcmd == "cluster" {
+		nsmcTestRecs, _, err = data.LoadNSMC(cfg.NSMCTestPath())
+		if err != nil {
+			return err
+		}
+		nsmcTestRecs = subSampleRecords(nsmcTestRecs, ob.MaxEvalPerDomain, 104)
+		if checkCache(filepath.Join(ob.EmbedCacheDir, fmt.Sprintf("nsmc_test_%d.bin", len(nsmcTestRecs))), len(nsmcTestRecs)) {
+			needEncoder = true
+		}
+	}
+	if subcmd == "analyze" && inputPath != "" {
+		needEncoder = true
+	}
+
+	var enc *onnxembed.ONNXEncoder
+	if needEncoder {
+		modelPath, vocabPath, err := onnxembed.EnsureONNXAssets(ob, cfg.Runtime.HTTPTimeoutSec, cfg.Runtime.HTTPRetries, log)
+		if err != nil {
+			return err
+		}
+		enc, err = onnxembed.NewONNXEncoder(backend, modelPath, vocabPath, ob.MaxSeqLen, ob.EncodeBatchSize, ob.EmbedDim)
+		if err != nil {
+			return err
+		}
+	}
+
+	loadSplit := func(name string, recs []data.Record) ([][]float32, error) {
+		cachePath := filepath.Join(ob.EmbedCacheDir, fmt.Sprintf("%s_%d.bin", name, len(recs)))
+		return onnxembed.EncodeOrLoadCache(cachePath, extractTexts(recs), enc, log)
+	}
+
+	var ynatTrainEmb, nsmcTrainEmb, ynatValEmb, nsmcTestEmb [][]float32
+	if len(ynatTrainRecs) > 0 {
+		if ynatTrainEmb, err = loadSplit("ynat_train", ynatTrainRecs); err != nil {
+			if enc != nil {
+				enc.Close()
+			}
+			return err
+		}
+	}
+	if len(nsmcTrainRecs) > 0 {
+		if nsmcTrainEmb, err = loadSplit("nsmc_train", nsmcTrainRecs); err != nil {
+			if enc != nil {
+				enc.Close()
+			}
+			return err
+		}
+	}
+	if len(ynatValRecs) > 0 {
+		if ynatValEmb, err = loadSplit("ynat_val", ynatValRecs); err != nil {
+			if enc != nil {
+				enc.Close()
+			}
+			return err
+		}
+	}
+	if len(nsmcTestRecs) > 0 {
+		if nsmcTestEmb, err = loadSplit("nsmc_test", nsmcTestRecs); err != nil {
+			if enc != nil {
+				enc.Close()
+			}
+			return err
+		}
+	}
+	if enc != nil && !(subcmd == "analyze" && inputPath != "") {
+		enc.Close()
+		enc = nil
+	}
+
+	actualDim := ob.EmbedDim
+	for _, set := range [][][]float32{ynatTrainEmb, ynatValEmb, nsmcTrainEmb, nsmcTestEmb} {
+		if len(set) > 0 && len(set[0]) > 0 {
+			actualDim = len(set[0])
+			break
+		}
+	}
+
+	rng := rand.New(rand.NewSource(cfg.Runtime.Seed))
+	var store *gomlxmodel.Store
+	if subcmd == "pipeline" || subcmd == "train" {
+		ynatTrainEx, _ := nfcmodel.PrepareEmbedExamples(ynatTrainRecs, ynatTrainEmb, tax, cfg.Training.NFCNegativeCalibrationProb, rng)
+		nsmcTrainEx, _ := nfcmodel.PrepareEmbedExamples(nsmcTrainRecs, nsmcTrainEmb, tax, cfg.Training.NFCNegativeCalibrationProb, rng)
+		log.Status("TRAIN", "START", "training GoMLX ReLU heads on ONNX backbone embeddings (dim=%d, ynat=%d, nsmc=%d)",
+			actualDim, len(ynatTrainEx), len(nsmcTrainEx))
+		store, err = nfcmodel.TrainOnEmbeddings(backend, cfg, tax, actualDim, ynatTrainEx, nsmcTrainEx, resume, log)
+		if err != nil {
+			return err
+		}
+		defer store.Finalize()
+		log.Status("TRAIN", "SUCCESS", "ONNX head checkpoint saved to %s", cfg.Paths.CheckpointDir)
+		if subcmd == "train" {
+			return nil
+		}
+	} else {
+		predTmp, loadedStore, err := nfcmodel.LoadEmbedPredictor(backend, cfg.Paths.CheckpointDir, cfg, actualDim, tax.NumTopics(), tax.NumFeelings(), cfg.Training.EvalBatchSize)
+		if err != nil {
+			return err
+		}
+		predTmp.Close()
+		store = loadedStore
+		defer store.Finalize()
+	}
+
+	var evalReport *nfcmodel.EvalReport
+	var ynatValEx []nfcmodel.EmbedExample
+	var ynatValPreds []sorter.ArticlePrediction
+
+	if subcmd == "pipeline" || subcmd == "eval" {
+		evalRng := rand.New(rand.NewSource(cfg.Runtime.Seed + 1))
+		ynatValEx, _ = nfcmodel.PrepareEmbedExamples(ynatValRecs, ynatValEmb, tax, cfg.Training.NFCNegativeCalibrationProb, evalRng)
+		nsmcTestEx, _ := nfcmodel.PrepareEmbedExamples(nsmcTestRecs, nsmcTestEmb, tax, cfg.Training.NFCNegativeCalibrationProb, evalRng)
+		log.Status("EVAL", "START", "evaluating onnx_backbone_relu on YNAT val (%d) and NSMC test (%d)", len(ynatValEx), len(nsmcTestEx))
+		evalReport, ynatValPreds, err = nfcmodel.EvaluateOnEmbeddings(backend, store, cfg, tax, actualDim, ynatValEx, nsmcTestEx)
+		if err != nil {
+			return err
+		}
+		logEvalReport(log, evalReport)
+		log.Status("EVAL", "SUCCESS", "YNAT_acc=%.4f YNAT_macro_f1=%.4f NSMC_acc=%.4f NFC_recall@3=%.4f",
+			evalReport.YNATAccuracy, evalReport.YNATMacroF1, evalReport.NSMCAccuracy, evalReport.NFCRecallAt3)
+		if subcmd == "eval" {
+			return nil
+		}
+	}
+
+	if subcmd == "pipeline" || subcmd == "analyze" {
+		log.Status("ANALYZE", "START", "classifying and sorting articles with onnx_backbone_relu")
+		var analyzeRecs []data.Record
+		var analyzePreds []sorter.ArticlePrediction
+		if inputPath == "" && len(ynatValPreds) > 0 {
+			analyzeRecs = ynatValRecs
+			analyzePreds = ynatValPreds
+		} else {
+			var analyzeEmb [][]float32
+			if inputPath != "" {
+				analyzeRecs, err = data.LoadCustomArticles(inputPath)
+				if err != nil {
+					return err
+				}
+				analyzeEmb, err = enc.EncodeTexts(extractTexts(analyzeRecs), log)
+				enc.Close()
+				if err != nil {
+					return err
+				}
+			} else {
+				analyzeRecs = ynatValRecs
+				analyzeEmb = ynatValEmb
+			}
+			analyzeEx, _ := nfcmodel.PrepareEmbedExamples(analyzeRecs, analyzeEmb, tax, 0, nil)
+			pred, err := nfcmodel.NewEmbedPredictor(backend, store, cfg, actualDim, tax.NumTopics(), tax.NumFeelings(), cfg.Training.EvalBatchSize)
+			if err != nil {
+				return err
+			}
+			analyzePreds, err = pred.PredictEmbedExamples(analyzeEx)
+			pred.Close()
+			if err != nil {
+				return err
+			}
+		}
+		if limit > 0 && limit < len(analyzeRecs) {
+			analyzeRecs = analyzeRecs[:limit]
+			analyzePreds = analyzePreds[:limit]
+		}
+		scored, err := sorter.ScoreArticles(analyzeRecs, analyzePreds, tax, cfg.InferenceAndSorting)
+		if err != nil {
+			return err
+		}
+		if err := sorter.SortArticles(scored, cfg.InferenceAndSorting.DefaultSortMode, tax); err != nil {
+			return err
+		}
+		report := sorter.BuildReport(scored, tax, cfg.InferenceAndSorting.DefaultSortMode, cfg.InferenceAndSorting.NFCActiveThreshold, evalReport)
+		if err := sorter.WriteOutputs(report, cfg.Paths.OutputDir, cfg.InferenceAndSorting, tax); err != nil {
+			return err
+		}
+		log.Status("ANALYZE", "SUCCESS", "wrote %d sorted articles to %s", len(scored), cfg.Paths.OutputDir)
+		if subcmd == "analyze" {
+			return nil
+		}
+	}
+
+	if (subcmd == "pipeline" && cfg.Clustering.Enabled) || subcmd == "cluster" {
+		log.Status("CLUSTER", "START", "running 3-method clustering on onnx_backbone_relu embeddings")
+		cRng := rand.New(rand.NewSource(cfg.Runtime.Seed + 99))
+		yIdxs := sampleIndices(len(ynatValRecs), cfg.Clustering.YNATSampleSize, cRng)
+		nIdxs := sampleIndices(len(nsmcTestRecs), cfg.Clustering.NSMCSampleSize, cRng)
+
+		mixedRecs := make([]data.Record, 0, len(yIdxs)+len(nIdxs))
+		mixedEmb := make([][]float32, 0, len(yIdxs)+len(nIdxs))
+		for _, idx := range yIdxs {
+			mixedRecs = append(mixedRecs, ynatValRecs[idx])
+			mixedEmb = append(mixedEmb, ynatValEmb[idx])
+		}
+		for _, idx := range nIdxs {
+			mixedRecs = append(mixedRecs, nsmcTestRecs[idx])
+			mixedEmb = append(mixedEmb, nsmcTestEmb[idx])
+		}
+		mixedEx, _ := nfcmodel.PrepareEmbedExamples(mixedRecs, mixedEmb, tax, 0, nil)
+		pred, err := nfcmodel.NewEmbedPredictor(backend, store, cfg, actualDim, tax.NumTopics(), tax.NumFeelings(), cfg.Training.EvalBatchSize)
+		if err != nil {
+			return err
+		}
+		mixedPreds, err := pred.PredictEmbedExamples(mixedEx)
+		pred.Close()
+		if err != nil {
+			return err
+		}
+		scored, err := sorter.ScoreArticles(mixedRecs, mixedPreds, tax, cfg.InferenceAndSorting)
+		if err != nil {
+			return err
+		}
+		report, err := cluster.RunClusteringPipeline(context.Background(), mixedRecs, mixedPreds, scored, tax, cfg, log)
+		if err != nil {
+			return err
+		}
+		v := report.Validation
+		log.Info("cluster", "HDBSCAN clusters=%d (cross_domain=%d), clustered=%d/%d, noise=%d (%.1f%%)",
+			v.NumClusters, v.CrossDomainClusters, v.ClusteredDocs, v.TotalDocs, v.NoiseDocs, v.NoiseRatio*100)
+		log.Info("cluster_val", "Silhouette=%.4f (target=%.2f), DunnCentroid=%.4f, DunnStrict=%.4f, MeanNPMI=%.4f, MeanUMass=%.4f",
+			v.SilhouetteScore, v.SilhouetteTarget, v.DunnIndexCentroid, v.DunnIndexStrict, v.MeanNPMICoherence, v.MeanUMassCoherence)
+		log.Status("CLUSTER", "SUCCESS", "clusters=%d silhouette=%.4f npmi=%.4f dunn_c=%.4f bridges=%d reports_dir=%s",
+			v.NumClusters, v.SilhouetteScore, v.MeanNPMICoherence, v.DunnIndexCentroid, v.CrossDomainEntityBridges, cfg.Paths.OutputDir)
+	}
+	return nil
 }

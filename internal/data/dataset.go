@@ -14,14 +14,16 @@ import (
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/tokenizer"
 )
 
-// EncodedExample holds tokenized IDs and multi-task supervision targets/masks for one text item.
+// EncodedExample holds tokenized IDs, word-order IDs, and multi-task supervision targets/masks for one text item.
 type EncodedExample struct {
-	Record     Record
-	Tokens     []int32
-	NFCTargets []float32
-	NFCScores  []float32
-	NFCMask    float32
-	NFCMatched int
+	Record         Record
+	Tokens         []int32
+	WordTokens     []int32
+	NFCTargets     []float32
+	NFCScores      []float32
+	NFCMask        float32
+	NFCMatched     int
+	GuardTriggered bool
 }
 
 // PrepStats summarizes weak-supervision NFC coverage on a prepared split.
@@ -29,6 +31,7 @@ type PrepStats struct {
 	Total             int
 	NFCActiveExamples int
 	NFCSupervised     int
+	GuardHits         int
 	PerFeelingHits    []int
 }
 
@@ -42,6 +45,7 @@ func PrepareExamples(records []Record, tok *tokenizer.Tokenizer, tax *nfc.Taxono
 	out := make([]EncodedExample, len(records))
 	for i, rec := range records {
 		tokens := tok.Encode(rec.Text)
+		wordTokens := tok.EncodeWordSeq(rec.Text)
 		targets, scores, matched, guardTriggered := tax.WeakAnnotateDetailed(rec.Text)
 		var nfcMask float32
 		if matched > 0 {
@@ -57,6 +61,7 @@ func PrepareExamples(records []Record, tok *tokenizer.Tokenizer, tax *nfc.Taxono
 			// Homonym guard hits provide high-value negative calibration for subword/bigram collisions (e.g., 화가/문화가).
 			nfcMask = 1.0
 			stats.NFCSupervised++
+			stats.GuardHits++
 		} else if negCalibProb > 0 && rng != nil {
 			// Calibrate negative NFC examples primarily from positive reviews or a small fraction of neutral headlines.
 			if rec.HasSentiment && rec.SentimentLabel >= 0.5 {
@@ -69,13 +74,18 @@ func PrepareExamples(records []Record, tok *tokenizer.Tokenizer, tax *nfc.Taxono
 				stats.NFCSupervised++
 			}
 		}
+		if guardTriggered && matched > 0 {
+			stats.GuardHits++
+		}
 		out[i] = EncodedExample{
-			Record:     rec,
-			Tokens:     tokens,
-			NFCTargets: targets,
-			NFCScores:  scores,
-			NFCMask:    nfcMask,
-			NFCMatched: matched,
+			Record:         rec,
+			Tokens:         tokens,
+			WordTokens:     wordTokens,
+			NFCTargets:     targets,
+			NFCScores:      scores,
+			NFCMask:        nfcMask,
+			NFCMatched:     matched,
+			GuardTriggered: guardTriggered,
 		}
 	}
 	return out, stats
@@ -86,6 +96,7 @@ type MultiTaskTrainDataset struct {
 	name        string
 	batchSize   int
 	seqLen      int
+	wordSeqLen  int
 	numNFC      int
 	ynatRatio   float64
 	nfcPosRatio float64
@@ -101,7 +112,7 @@ func NewMultiTaskTrainDataset(
 	name string,
 	ynatExamples, nsmcExamples []EncodedExample,
 	cfg config.TrainingConfig,
-	seqLen, numNFC int,
+	seqLen, wordSeqLen, numNFC int,
 	seed int64,
 ) (*MultiTaskTrainDataset, error) {
 	if len(ynatExamples) == 0 {
@@ -109,6 +120,9 @@ func NewMultiTaskTrainDataset(
 	}
 	if len(nsmcExamples) == 0 {
 		return nil, fmt.Errorf("nsmcExamples must not be empty")
+	}
+	if wordSeqLen <= 0 {
+		wordSeqLen = seqLen
 	}
 	var ynatPos, nsmcPos []EncodedExample
 	for _, ex := range ynatExamples {
@@ -125,6 +139,7 @@ func NewMultiTaskTrainDataset(
 		name:        name,
 		batchSize:   cfg.BatchSize,
 		seqLen:      seqLen,
+		wordSeqLen:  wordSeqLen,
 		numNFC:      numNFC,
 		ynatRatio:   cfg.YNATBatchRatio,
 		nfcPosRatio: cfg.NFCPositiveSampleRatio,
@@ -185,7 +200,7 @@ func (d *MultiTaskTrainDataset) Iter() iter.Seq2[train.Batch, error] {
 				picked[i], picked[j] = picked[j], picked[i]
 			})
 
-			batch := buildBatch(picked, d.seqLen, d.numNFC, d.name)
+			batch := buildBatch(picked, d.seqLen, d.wordSeqLen, d.numNFC, d.name)
 			if !yield(batch, nil) {
 				return
 			}
@@ -193,9 +208,10 @@ func (d *MultiTaskTrainDataset) Iter() iter.Seq2[train.Batch, error] {
 	}
 }
 
-func buildBatch(items []EncodedExample, seqLen, numNFC int, spec any) train.Batch {
+func buildBatch(items []EncodedExample, seqLen, wordSeqLen, numNFC int, spec any) train.Batch {
 	bs := len(items)
 	tokensFlat := make([]int32, bs*seqLen)
+	wordTokensFlat := make([]int32, bs*wordSeqLen)
 	topicTarget := make([]int32, bs)
 	topicMask := make([]float32, bs)
 	sentTarget := make([]float32, bs)
@@ -205,6 +221,9 @@ func buildBatch(items []EncodedExample, seqLen, numNFC int, spec any) train.Batc
 
 	for i, ex := range items {
 		copy(tokensFlat[i*seqLen:(i+1)*seqLen], ex.Tokens)
+		if len(ex.WordTokens) > 0 {
+			copy(wordTokensFlat[i*wordSeqLen:(i+1)*wordSeqLen], ex.WordTokens)
+		}
 		if ex.Record.HasTopic {
 			topicTarget[i] = int32(ex.Record.TopicID)
 			topicMask[i] = 1.0
@@ -220,6 +239,7 @@ func buildBatch(items []EncodedExample, seqLen, numNFC int, spec any) train.Batc
 	return train.Batch{
 		Inputs: []*tensors.Tensor{
 			tensors.FromFlatDataAndDimensions(tokensFlat, bs, seqLen),
+			tensors.FromFlatDataAndDimensions(wordTokensFlat, bs, wordSeqLen),
 		},
 		Labels: []*tensors.Tensor{
 			tensors.FromFlatDataAndDimensions(topicTarget, bs, 1),
