@@ -1,9 +1,0 @@
-{
-  "vocab_size": 24000,
-  "embed_dim": 64,
-  "out_dim": 128,
-  "dropout_rate": 0.15,
-  "steps": 600,
-  "first_loss": 12.624968,
-  "final_loss": 5.965584
-}
