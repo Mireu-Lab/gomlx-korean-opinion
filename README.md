@@ -58,11 +58,46 @@ go run ./cmd/opinion-analyzer export-dataset --config config/config.yaml --outpu
 ./scripts/publish_hf.sh dataset
 ```
 
+### GitHub(소스) vs Hugging Face(가중치) vs 추론
+
+학습이 끝난 뒤 역할이 세 갈래입니다. **바이너리(`bin/`)와 체크포인트는 GitHub에 올리지 않습니다.**
+
+| 위치 | 넣는 것 | 넣지 않는 것 |
+|---|---|---|
+| **GitHub** (`github.com/Mireu-Lab/gomlx-korean-opinion`) | `cmd/`, `internal/`, `config/*.yaml`, `scripts/`, `docs/`, `colab_tpu_runner.ipynb` | `bin/`, `checkpoints/`, `data/`, `logs/`, `outputs/` (`.gitignore`) |
+| **HF Model** (`Mireu-Lab/gomlx-korean-opinion`) | `*.bin`/`*.json` 체크포인트, `vocab.json`, `topics.yaml`/`nfc_taxonomy.yaml`, `inference.json`, 모델 카드 | Go 소스, `opinion-analyzer` 실행 파일 |
+| **HF Dataset** (`Mireu-Lab/gomlx-korean-opinion-dataset`) | 전처리 Parquet | 모델 가중치 |
+
+```bash
+# 1) 학습 (로컬 / Colab TPU)
+go run ./cmd/opinion-analyzer train --config config/config.yaml --backend xla:cpu --provider scratch_relu
+
+# 2) 같은 체크포인트로 한 문장 추론 (학습 직후 검증)
+go run ./cmd/opinion-analyzer infer --config config/config.yaml --text "금리 인상으로 가계 부담이 커진다"
+
+# 3) 가중치만 HF 스테이징 후 업로드 (hf auth login 필요)
+go run ./cmd/opinion-analyzer export-model --config config/config.yaml --hf-staging-dir data/hf_model_staging
+./scripts/publish_hf.sh model
+
+# 4) 소스는 GitHub만 (이미 커밋된 뒤)
+./scripts/publish_github.sh
+
+# 5) 다른 머신에서 가중치 받아 추론
+./scripts/fetch_hf_model.sh
+go run ./cmd/opinion-analyzer infer \
+  --config config/config.yaml \
+  --checkpoint-dir data/hf_model/checkpoints/relu_nlp \
+  --text "물가 상승에 대한 우려가 커지고 있다"
+```
+
+`analyze`는 파일 단위 배치·리포트이고, `infer`는 `--text` / `--input(.txt|.jsonl|.csv)` JSON 예측입니다.
+
 ### 단일 모델 파이프라인 & 개별 단계 실행
 ```bash
 ./scripts/run_pipeline.sh pipeline
 
 go run ./cmd/opinion-analyzer train --config config/config.yaml --backend xla:cpu --provider ko_hub_cnn_relu --steps 2500
+go run ./cmd/opinion-analyzer infer --config config/config.yaml --backend xla:cpu --provider ko_hub_cnn_relu --text "물가 부담이 커진다"
 go run ./cmd/opinion-analyzer analyze --config config/config.yaml --backend xla:cpu --provider ko_hub_cnn_relu --sort-by topic_nfc_intensity
 go run ./cmd/opinion-analyzer cluster --config config/config.yaml --backend xla:cpu --provider ko_hub_cnn_relu --pca-dim 24
 go run ./cmd/opinion-analyzer eval-human --config config/config.yaml --input outputs/human_eval_sample.csv

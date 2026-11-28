@@ -48,6 +48,12 @@ fi
 if [[ -n "${INPUT_FILE:-}" ]]; then
   CMD_ARGS+=(--input "${INPUT_FILE}")
 fi
+if [[ -n "${INFER_TEXT:-}" ]]; then
+  CMD_ARGS+=(--text "${INFER_TEXT}")
+fi
+if [[ -n "${HF_STAGING_DIR:-}" ]]; then
+  CMD_ARGS+=(--hf-staging-dir "${HF_STAGING_DIR}")
+fi
 if [[ -n "${OUTPUT_DIR:-}" ]]; then
   CMD_ARGS+=(--output-dir "${OUTPUT_DIR}")
 fi

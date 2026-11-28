@@ -364,6 +364,9 @@ func TrainOnEmbeddings(
 	if err := ckptHandler.Save(); err != nil {
 		return nil, err
 	}
+	if err := SaveRunSpec(cfg.Paths.CheckpointDir, RunSpecFromConfig(cfg, 0, tax.NumTopics(), tax.NumFeelings())); err != nil {
+		return nil, fmt.Errorf("save graph_config.json: %w", err)
+	}
 	log.Info("trainer.onnx", "training complete: steps=%d final_loss=%.4f total_time=%s",
 		loop.LoopStep, finalLoss, time.Since(startTime).Round(time.Second))
 	return store, nil

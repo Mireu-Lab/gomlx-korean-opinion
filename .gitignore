@@ -1,5 +1,6 @@
-# Compiled binaries
+# Compiled binaries (GitHub source-only; never publish executables)
 /bin/
+/opinion-analyzer
 
 # Downloaded datasets, checkpoints, logs, and generated analysis reports
 /data/

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -23,6 +24,7 @@ import (
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/nfc"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/onnxembed"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/pretrain"
+	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/release"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/sorter"
 	"github.com/Mireu-Lab/gomlx-korean-opinion/internal/tokenizer"
 )
@@ -39,7 +41,9 @@ func main() {
 	stepsOverride := fs.Int("steps", 0, "Override training.train_steps")
 	batchOverride := fs.Int("batch-size", 0, "Override training.batch_size")
 	sortBy := fs.String("sort-by", "", "Override sort mode (topic_nfc_intensity|nfc_intensity|intensity_desc|sentiment_neg_desc)")
-	inputPath := fs.String("input", "", "Optional external file (.jsonl/.csv/.tsv for analyze, or annotated CSV for eval-human)")
+	inputPath := fs.String("input", "", "Optional external file (.jsonl/.csv/.tsv/.txt for analyze/infer, or annotated CSV for eval-human)")
+	rawText := fs.String("text", "", "Raw Korean text for infer (repeat via --input for batches)")
+	hfStagingDir := fs.String("hf-staging-dir", envOrDefault("NFC_HF_STAGING_DIR", "data/hf_model_staging"), "Destination for export-model Hugging Face staging")
 	outputDirOverride := fs.String("output-dir", "", "Override paths.output_dir")
 	checkpointDirOverride := fs.String("checkpoint-dir", "", "Override paths.checkpoint_dir")
 	providerOverride := fs.String("provider", "", "Override embedding.provider (scratch_relu|ko_hub_graph)")
@@ -114,17 +118,26 @@ func main() {
 	}
 	defer func() { _ = log.Close() }()
 
-	if err := runCommand(subcmd, cfg, *inputPath, *limit, *resume, *stepsOverride, *batchOverride, log); err != nil {
+	if err := runCommand(subcmd, cfg, *inputPath, *rawText, *hfStagingDir, *limit, *resume, *stepsOverride, *batchOverride, log); err != nil {
 		log.Status(strings.ToUpper(subcmd), "FAILED", "%v", err)
 		log.Error("cli", "command %q failed: %v", subcmd, err)
 		os.Exit(1)
 	}
 }
 
+func envOrDefault(key, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return fallback
+}
+
 func runCommand(
 	subcmd string,
 	cfg *config.Config,
 	inputPath string,
+	rawText string,
+	hfStagingDir string,
 	limit int,
 	resume bool,
 	stepsOverride int,
@@ -148,11 +161,13 @@ func runCommand(
 		return stagePretrain(cfg, tax, stepsOverride, batchOverride, log)
 	case "export-dataset":
 		return stageExportDataset(cfg, tax, log)
+	case "export-model":
+		return stageExportModel(cfg, tax, hfStagingDir, log)
 	case "eval-human":
 		return stageEvalHuman(cfg, inputPath, log)
 	}
 	if cfg.Embedding.Provider == "onnx_backbone_relu" {
-		return runONNXCommand(subcmd, cfg, tax, inputPath, limit, resume, log)
+		return runONNXCommand(subcmd, cfg, tax, inputPath, rawText, limit, resume, log)
 	}
 
 	switch subcmd {
@@ -166,6 +181,8 @@ func runCommand(
 		return stageEval(cfg, tax, log)
 	case "analyze":
 		return stageAnalyze(cfg, tax, inputPath, limit, nil, nil, nil, log)
+	case "infer":
+		return stageInfer(cfg, tax, inputPath, rawText, log)
 	case "cluster":
 		return stageCluster(cfg, tax, nil, nil, nil, log)
 	case "pipeline":
@@ -593,6 +610,105 @@ func stageAnalyze(
 	return nil
 }
 
+func stageExportModel(cfg *config.Config, tax *nfc.Taxonomy, stagingDir string, log *logging.DualLogger) error {
+	if strings.TrimSpace(stagingDir) == "" {
+		stagingDir = filepath.Join("data", "hf_model_staging")
+	}
+	log.Status("EXPORT_MODEL", "START", "staging trained weights for Hugging Face at %s (provider=%s)", stagingDir, cfg.Embedding.Provider)
+	man, err := release.StageModel(cfg, stagingDir)
+	if err != nil {
+		return err
+	}
+	tokLen := 0
+	if tok, err := tokenizer.Load(cfg.VocabPath()); err == nil {
+		tokLen = tok.VocabLen()
+	}
+	spec, err := nfcmodel.ResolveRunSpec(cfg.Paths.CheckpointDir, cfg, tokLen, tax.NumTopics(), tax.NumFeelings())
+	if err == nil {
+		ckptRel := filepath.Join(stagingDir, "checkpoints", filepath.Base(cfg.Paths.CheckpointDir))
+		if err := nfcmodel.SaveRunSpec(ckptRel, spec); err != nil {
+			log.Warn("export_model", "could not write graph_config.json: %v", err)
+		} else {
+			log.Info("export_model", "wrote graph_config.json provider=%s vocab=%d", spec.Provider, spec.Graph.VocabSize)
+		}
+	}
+	log.Status("EXPORT_MODEL", "SUCCESS", "copied %d files to %s; next: ./scripts/publish_hf.sh model", len(man.CopiedFiles), man.StagingDir)
+	return nil
+}
+
+func stageInfer(cfg *config.Config, tax *nfc.Taxonomy, inputPath, rawText string, log *logging.DualLogger) error {
+	records, err := release.CollectInferRecords(rawText, inputPath)
+	if err != nil {
+		return err
+	}
+	log.Status("INFER", "START", "running checkpoint inference on %d text(s) provider=%s ckpt=%s",
+		len(records), cfg.Embedding.Provider, cfg.Paths.CheckpointDir)
+
+	tok, err := tokenizer.Load(cfg.VocabPath())
+	if err != nil {
+		return fmt.Errorf("load vocab for infer (train or export-model first): %w", err)
+	}
+	spec, err := nfcmodel.ResolveRunSpec(cfg.Paths.CheckpointDir, cfg, tok.VocabLen(), tax.NumTopics(), tax.NumFeelings())
+	if err != nil {
+		return err
+	}
+	log.Info("infer", "using provider=%s vocab=%d max_seq=%d (graph_config or checkpoint detect)",
+		spec.Provider, spec.Graph.VocabSize, spec.MaxSeqLen)
+	examples, _ := data.PrepareExamples(records, tok, tax, 0, nil)
+
+	backend, err := compute.NewWithConfig(cfg.Runtime.Backend)
+	if err != nil {
+		return fmt.Errorf("init GoMLX backend %q: %w", cfg.Runtime.Backend, err)
+	}
+	defer backend.Finalize()
+
+	graphCfg := spec.Graph
+	pred, _, err := nfcmodel.LoadPredictor(backend, cfg.Paths.CheckpointDir, graphCfg, spec.EvalBatchSize, spec.MaxSeqLen, spec.WordSeqLen)
+	if err != nil {
+		return err
+	}
+	defer pred.Close()
+
+	preds, err := pred.PredictExamples(examples)
+	if err != nil {
+		return err
+	}
+	scored, err := sorter.ScoreArticles(records, preds, tax, cfg.InferenceAndSorting)
+	if err != nil {
+		return err
+	}
+	return writeInferJSON(cfg, scored, log)
+}
+
+func writeInferJSON(cfg *config.Config, scored []sorter.ScoredArticle, log *logging.DualLogger) error {
+	if err := os.MkdirAll(cfg.Paths.OutputDir, 0o755); err != nil {
+		return err
+	}
+	outPath := filepath.Join(cfg.Paths.OutputDir, "infer.json")
+	f, err := os.Create(outPath)
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(f)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(scored); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	stdout := json.NewEncoder(os.Stdout)
+	stdout.SetEscapeHTML(false)
+	stdout.SetIndent("", "  ")
+	if err := stdout.Encode(scored); err != nil {
+		return err
+	}
+	log.Status("INFER", "SUCCESS", "wrote %d predictions to %s", len(scored), outPath)
+	return nil
+}
+
 func stageCluster(
 	cfg *config.Config,
 	tax *nfc.Taxonomy,
@@ -912,16 +1028,18 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, `Usage: opinion-analyzer <command> [flags]
 
 Commands:
-  download     Download NSMC and KLUE-YNAT datasets configured in config.yaml
+  download        Download NSMC and KLUE-YNAT datasets configured in config.yaml
   build-graph     Download Unihan/OMW sources and build KO-Hub multilingual roots CSR graph
   pretrain        Run GoMLX Context-Aware Soft Edge contrastive pretraining for KO-Hub Student
   export-dataset  Export preprocessed Parquet dataset splits, vocab, and KO-Hub graph metadata
+  export-model    Stage checkpoints + vocab + taxonomy YAML for Hugging Face (not GitHub)
   train           Fit Korean tokenizer and train GoMLX ReLU multi-task model
-  eval         Evaluate saved checkpoint on KLUE-YNAT val, NSMC test, and NFC
-  analyze      Classify and sort news articles by topic, Nuclear Feeling, and intensity
-  cluster      Run 3-method clustering (HDBSCAN, Entity Anchors, Hierarchical Topics) & 3-stage validation
-  eval-human   Score completed human_eval_sample.csv (Agreement Rate & Cohen's Kappa)
-  pipeline     Run end-to-end: download -> (pretrain if ko_hub_graph) -> train -> eval -> analyze -> cluster
+  eval            Evaluate saved checkpoint on KLUE-YNAT val, NSMC test, and NFC
+  infer           Run trained model on --text and/or --input (prints JSON)
+  analyze         Classify and sort news articles by topic, Nuclear Feeling, and intensity
+  cluster         Run 3-method clustering (HDBSCAN, Entity Anchors, Hierarchical Topics) & 3-stage validation
+  eval-human      Score completed human_eval_sample.csv (Agreement Rate & Cohen's Kappa)
+  pipeline        Run end-to-end: download -> (pretrain if ko_hub_graph) -> train -> eval -> analyze -> cluster
 
 Flags:
   --config <path>         Path to config YAML (default: config/config.yaml)
@@ -935,7 +1053,9 @@ Flags:
   --steps <int>           Override training.train_steps (or pretrain steps)
   --batch-size <int>      Override training.batch_size (or pretrain batch_size)
   --sort-by <mode>        topic_nfc_intensity | nfc_intensity | intensity_desc | sentiment_neg_desc
-  --input <path>          Custom file (.jsonl/.csv/.tsv for analyze, or annotated CSV for eval-human)
+  --text <string>         Raw Korean sentence for infer
+  --input <path>          Custom file (.jsonl/.csv/.tsv/.txt for analyze/infer, or annotated CSV for eval-human)
+  --hf-staging-dir <path> Destination for export-model (default: data/hf_model_staging or NFC_HF_STAGING_DIR)
   --output-dir <path>     Override paths.output_dir
   --limit <int>           Max articles to analyze (0 = all)
   --resume                Resume training from existing checkpoint
@@ -947,12 +1067,13 @@ func runONNXCommand(
 	cfg *config.Config,
 	tax *nfc.Taxonomy,
 	inputPath string,
+	rawText string,
 	limit int,
 	resume bool,
 	log *logging.DualLogger,
 ) error {
 	switch subcmd {
-	case "pipeline", "train", "eval", "analyze", "cluster":
+	case "pipeline", "train", "eval", "analyze", "cluster", "infer":
 	default:
 		printUsage()
 		return fmt.Errorf("unknown subcommand %q", subcmd)
@@ -1036,6 +1157,9 @@ func runONNXCommand(
 	if subcmd == "analyze" && inputPath != "" {
 		needEncoder = true
 	}
+	if subcmd == "infer" {
+		needEncoder = true
+	}
 
 	var enc *onnxembed.ONNXEncoder
 	if needEncoder {
@@ -1087,7 +1211,7 @@ func runONNXCommand(
 			return err
 		}
 	}
-	if enc != nil && !(subcmd == "analyze" && inputPath != "") {
+	if enc != nil && !(subcmd == "analyze" && inputPath != "") && subcmd != "infer" {
 		enc.Close()
 		enc = nil
 	}
@@ -1145,6 +1269,36 @@ func runONNXCommand(
 		if subcmd == "eval" {
 			return nil
 		}
+	}
+
+	if subcmd == "infer" {
+		records, err := release.CollectInferRecords(rawText, inputPath)
+		if err != nil {
+			return err
+		}
+		if enc == nil {
+			return fmt.Errorf("onnx encoder required for infer")
+		}
+		emb, err := enc.EncodeTexts(extractTexts(records), log)
+		enc.Close()
+		if err != nil {
+			return err
+		}
+		ex, _ := nfcmodel.PrepareEmbedExamples(records, emb, tax, 0, nil)
+		pred, err := nfcmodel.NewEmbedPredictor(backend, store, cfg, actualDim, tax.NumTopics(), tax.NumFeelings(), cfg.Training.EvalBatchSize)
+		if err != nil {
+			return err
+		}
+		preds, err := pred.PredictEmbedExamples(ex)
+		pred.Close()
+		if err != nil {
+			return err
+		}
+		scored, err := sorter.ScoreArticles(records, preds, tax, cfg.InferenceAndSorting)
+		if err != nil {
+			return err
+		}
+		return writeInferJSON(cfg, scored, log)
 	}
 
 	if subcmd == "pipeline" || subcmd == "analyze" {

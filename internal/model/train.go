@@ -197,6 +197,9 @@ func Train(
 	if err := ckptHandler.Save(); err != nil {
 		return nil, fmt.Errorf("save final checkpoint: %w", err)
 	}
+	if err := SaveRunSpec(cfg.Paths.CheckpointDir, RunSpecFromConfig(cfg, vocabLen, tax.NumTopics(), tax.NumFeelings())); err != nil {
+		return nil, fmt.Errorf("save graph_config.json: %w", err)
+	}
 	log.Info("trainer", "training complete: steps=%d final_loss=%.4f final_ma_loss=%.4f median_step=%s total_time=%s",
 		loop.LoopStep, finalLoss, finalMA, loop.MedianTrainStepDuration().Round(time.Millisecond), time.Since(startTime).Round(time.Second))
 	return store, nil
