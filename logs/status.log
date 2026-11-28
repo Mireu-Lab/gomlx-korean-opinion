@@ -1,0 +1,18 @@
+[2026-11-28T00:00:35Z] [PRETRAIN] [START] preparing KO-Hub graph & corpus for contrastive pretraining (steps=600, out_dim=128)
+[2026-11-28T00:00:35Z] [BUILD_GRAPH] [START] downloading/verifying multilingual roots and building KO-Hub CSR graph
+[2026-11-28T00:00:46Z] [BUILD_GRAPH] [SUCCESS] nodes=74578 edges=374577 multi_sense=737 (by_type=map[EN_CONCEPT:13647 HANJA_MORPHEME:1690 JA_CONCEPT:16524 KO_SENSE:9070 KO_SURFACE:26751 ZH_CONCEPT:6896])
+[2026-11-28T00:01:16Z] [PRETRAIN] [SUCCESS] steps=600 first_loss=12.6250 final_loss=5.9656 dir=checkpoints/ko_hub_pretrain
+[2026-11-28T00:01:16Z] [DOWNLOAD] [START] ensuring NSMC and KLUE-YNAT datasets in data
+[2026-11-28T00:01:16Z] [DOWNLOAD] [SUCCESS] datasets ready in data
+[2026-11-28T00:01:16Z] [LOAD] [START] loading NSMC train and KLUE-YNAT train/val datasets
+[2026-11-28T00:01:17Z] [LOAD] [SUCCESS] NSMC_train=149995 YNAT_train=45678 YNAT_val=9107
+[2026-11-28T00:01:17Z] [TOKENIZE] [START] fitting/loading Korean word + Hangul n-gram tokenizer
+[2026-11-28T00:01:31Z] [TOKENIZE] [SUCCESS] vocab=24000 ynat_nfc_active=13214 nsmc_nfc_active=52349
+[2026-11-28T00:01:31Z] [TRAIN] [START] initializing GoMLX backend "xla:tpu"
+[2026-11-28T00:01:46Z] [TRAIN] [SUCCESS] checkpoint and vocab saved to checkpoints/relu_nlp
+[2026-11-28T00:01:49Z] [EVAL] [START] evaluating GoMLX ReLU model on KLUE-YNAT val (9107) and NSMC test (49997)
+[2026-11-28T00:01:50Z] [EVAL] [SUCCESS] YNAT_acc=0.7552 YNAT_macro_f1=0.7533 NSMC_acc=0.8355 NFC_recall@3=0.9505
+[2026-11-28T00:01:50Z] [ANALYZE] [START] classifying and sorting articles (mode=topic_nfc_intensity)
+[2026-11-28T00:01:51Z] [ANALYZE] [SUCCESS] wrote 9107 sorted articles to outputs (outputs/articles_sorted.json, outputs/articles_sorted.csv, outputs/social_opinion_report.md)
+[2026-11-28T00:01:51Z] [CLUSTER] [START] running 3-method clustering (HDBSCAN, Entity Anchors, Hierarchical Topics) & 3-stage validation (ynat=800, nsmc=400)
+[2026-11-28T00:01:51Z] [CLUSTER] [SUCCESS] clusters=9 silhouette=0.6527 npmi=-0.2907 dunn_c=2.2710 bridges=19 reports_dir=outputs
